@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 def parse_pred(pred_str):
-    if not pred_str or pd.isna(pred_str) or 'vs' in pred_str:
+    if not pred_str or pd.isna(pred_str) or 'vs' in str(pred_str):
         return None
     try:
         parts = str(pred_str).split(" ")
@@ -32,11 +32,16 @@ def get_series_outcomes(p_a, s_a, s_b):
 def run_analytics(responses_df, status_df, playin_df):
     if responses_df.empty:
         return pd.DataFrame()
-        
+
+    # Identify series columns
     series_cols = [c for c in responses_df.columns if " vs " in c]
     status_dict = status_df.set_index('Series_ID').to_dict('index') if not status_df.empty else {}
     
-    # 1. Consensus
+    # Identify Name and Email columns flexibly
+    name_col = next((c for c in responses_df.columns if 'Nombre' in c or 'Name' in c), responses_df.columns[2])
+    email_col = next((c for c in responses_df.columns if 'correo' in c or 'Email' in c), responses_df.columns[1])
+
+    # 1. Group Consensus Probability
     crowd_probs = {}
     for col in series_cols:
         t_a = col.split(" vs ")[0]
@@ -48,12 +53,10 @@ def run_analytics(responses_df, status_df, playin_df):
                 wins_a += 4 if p['winner'] == t_a else (p['total'] - 4)
         crowd_probs[col] = wins_a / total_g if total_g > 0 else 0.5
 
-    # 2. Individual Calculations
+    # 2. Main Calculation Loop
     user_results = []
     for _, user in responses_df.iterrows():
         real_pts, ev_pts, max_pts = 0, 0, 0
-        # Use common keys for Email
-        email = user.get('Dirección de correo electrónico') or user.get('Email') or 'N/A'
         
         for col in series_cols:
             stat = status_dict.get(col)
@@ -61,8 +64,11 @@ def run_analytics(responses_df, status_df, playin_df):
             if not pred or not stat: continue
             
             t_a, t_b = col.split(" vs ")
-            s_a, s_b = int(stat.get('Games_Team_A', 0)), int(stat.get('Games_Team_B', 0))
+            try:
+                s_a, s_b = int(stat.get('Games_Team_A', 0)), int(stat.get('Games_Team_B', 0))
+            except: s_a, s_b = 0, 0
             
+            # Probability Model
             n = s_a + s_b
             p_c = crowd_probs[col]
             p_l = (s_a / n) if n > 0 else 0.5
@@ -94,25 +100,28 @@ def run_analytics(responses_df, status_df, playin_df):
                 max_pts += max(possible_pts_match) if possible_pts_match else 0
 
         user_results.append({
-            "Email": email, "Name": user['Nombre'], 
-            "Real": int(real_pts), "EV": float(ev_pts), "Max": int(max_pts)
+            "Email": user[email_col], 
+            "Name": user[name_col], 
+            "Real": int(real_pts), 
+            "EV": float(ev_pts), 
+            "Max": int(max_pts)
         })
 
     leaderboard = pd.DataFrame(user_results)
     
-    # Merge Play-In Tiebreak
-    if not leaderboard.empty and not playin_df.empty:
-        # Standardize column name for merge
-        playin_clean = playin_df.copy()
-        if 'Dirección de correo electrónico' in playin_clean.columns:
-            playin_clean = playin_clean.rename(columns={'Dirección de correo electrónico': 'Email'})
+    # 3. Handle Tiebreaks
+    if not leaderboard.empty:
+        if not playin_df.empty:
+            # Flexible merge on PlayIn sheet too
+            pi_email_col = next((c for c in playin_df.columns if 'correo' in c or 'Email' in c), playin_df.columns[0])
+            pi_score_col = next((c for c in playin_df.columns if 'Score' in c or 'Puntos' in c), playin_df.columns[1])
             
-        leaderboard = leaderboard.merge(playin_clean[['Email', 'Score']], on='Email', how='left').fillna(0)
-        leaderboard['Score'] = leaderboard['Score'].astype(int)
-        leaderboard = leaderboard.rename(columns={'Score': 'PlayIn'})
+            playin_clean = playin_df[[pi_email_col, pi_score_col]].rename(columns={pi_email_col: 'Email', pi_score_col: 'PlayIn'})
+            leaderboard = leaderboard.merge(playin_clean, on='Email', how='left').fillna(0)
+        else:
+            leaderboard['PlayIn'] = 0
+            
+        leaderboard['PlayIn'] = leaderboard['PlayIn'].astype(int)
         leaderboard = leaderboard.sort_values(by=["Real", "EV", "PlayIn"], ascending=False).reset_index(drop=True)
-    elif not leaderboard.empty:
-        leaderboard['PlayIn'] = 0
-        leaderboard = leaderboard.sort_values(by=["Real", "EV"], ascending=False).reset_index(drop=True)
     
     return leaderboard
