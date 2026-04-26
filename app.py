@@ -11,7 +11,7 @@ st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 # --- LÓGICA DE PROCESAMIENTO ---
 
 def parse_prediccion(pred_str):
-    """Parsea 'Pistons 4-1 Magic' a diccionario."""
+    """Parsea 'Pistons 4-1 Magic' a diccionario identificando al verdadero ganador."""
     if not pred_str or pd.isna(pred_str):
         return None
     s = str(pred_str).strip()
@@ -19,9 +19,26 @@ def parse_prediccion(pred_str):
         return None
     try:
         partes = s.split(" ")
-        ganador = partes[0]
-        marcador = partes[1].split("-")
+        
+        # Buscar el índice donde está el marcador numérico (ej. "4-1", "2-4")
+        idx_marcador = -1
+        for i, parte in enumerate(partes):
+            if "-" in parte and parte.replace("-", "").isdigit():
+                idx_marcador = i
+                break
+                
+        if idx_marcador == -1:
+            return None
+            
+        equipo_a = " ".join(partes[:idx_marcador])
+        equipo_b = " ".join(partes[idx_marcador+1:])
+        
+        marcador = partes[idx_marcador].split("-")
         g1, g2 = int(marcador[0]), int(marcador[1])
+        
+        # El ganador es el equipo con más victorias
+        ganador = equipo_a if g1 > g2 else equipo_b
+        
         return {"ganador": ganador, "total_juegos": g1 + g2}
     except:
         return None
@@ -190,10 +207,17 @@ try:
             st.subheader("Distribución de Predicciones")
             series_cols = [c for c in df_r.columns if " vs " in c]
             if series_cols:
-                # Corregir el análisis de votos para el gráfico
                 melted = df_r.melt(id_vars=[df_r.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
-                # Extraer ganador: limpiar espacios y tomar la primera palabra
-                melted['Ganador'] = melted['Pred'].apply(lambda x: str(x).strip().split(" ")[0] if pd.notna(x) and x != "" else "N/A")
+                
+                # Usamos la función parse_prediccion para extraer al verdadero ganador
+                def extraer_ganador(pred):
+                    resultado = parse_prediccion(pred)
+                    return resultado['ganador'] if resultado else "N/A"
+                    
+                melted['Ganador'] = melted['Pred'].apply(extraer_ganador)
+                
+                # Opcional: Filtrar predicciones vacías o N/A para no ensuciar el gráfico
+                melted = melted[melted['Ganador'] != "N/A"]
                 
                 resumen_votos = melted.groupby(['Serie', 'Ganador']).size().reset_index(name='Votos')
                 
