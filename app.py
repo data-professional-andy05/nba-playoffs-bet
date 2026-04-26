@@ -151,7 +151,7 @@ def procesar_datos(resp_df, stat_df, playin_df):
         lb['PlayIn'] = lb['PlayIn'].astype(int)
         
         # Ordenar a los participantes
-        lb = lb.sort_values(by=["Puntos", "EV", "PlayIn"], ascending=False).reset_index(drop=True)
+        lb = lb.sort_values(by=["Puntos", "Esperado", "PlayIn"], ascending=False).reset_index(drop=True)
         
         # --- NUEVO: Insertar la columna de Posición al principio (basada en el orden) ---
         lb.insert(0, 'Posición', range(1, len(lb) + 1))
