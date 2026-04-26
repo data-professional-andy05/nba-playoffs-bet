@@ -188,26 +188,35 @@ try:
 
             def aplicar_estilos(row):
                 # row.name es el índice (0-14 para los primeros 15). 
-                # Esto coloreará de verde de la Posición 1 a la 15, y rojo de la 16 en adelante.
                 color_fondo = "#90ee90" if row.name < 15 else "#ffcccb"
                 return [f'background-color: {color_fondo}; color: black; font-weight: bold'] * len(row)
 
-            # Quitar Email de la vista
-            vista_df = df_l.drop(columns=['Email']) if 'Email' in df_l.columns else df_l
+            # Creamos una copia para la vista para no afectar el dataframe original
+            vista_df = df_l.copy()
+            if 'Email' in vista_df.columns:
+                vista_df = vista_df.drop(columns=['Email'])
+                
+            # Si no tenías la columna Posición, la creamos. Si ya la tenías, la usamos.
+            if 'Posición' not in vista_df.columns:
+                vista_df.insert(0, 'Posición', range(1, len(vista_df) + 1))
+            
+            # --- LA MAGIA: Concatenamos "1 - Participante" y borramos la columna extra ---
+            vista_df['Participante'] = vista_df['Posición'].astype(str) + " - " + vista_df['Participante']
+            vista_df = vista_df.drop(columns=['Posición'])
 
             st.dataframe(
                 vista_df.style.apply(aplicar_estilos, axis=1).format({"EV": "{:.2f}"}),
                 use_container_width=True,
                 height=700,
                 column_config={
-                    "Posición": st.column_config.NumberColumn("Pos.", width="small", format="%d"),
+                    # La columna Participante ahora tiene el número y está anclada (pinned) a la izquierda
                     "Participante": st.column_config.TextColumn("Participante", width="medium", pinned=True),
                     "Puntos": st.column_config.NumberColumn("Puntos", width="small", format="%d"),
                     "EV": st.column_config.NumberColumn("EV", width="small"),
                     "Máximo": st.column_config.NumberColumn("Máximo", width="small", format="%d"),
                     "PlayIn": st.column_config.NumberColumn("Play-In", width="small", format="%d"),
                 },
-                hide_index=True # Sigue ocultando el índice por defecto de pandas, dejando solo nuestra columna "Posición"
+                hide_index=True
             )
         with tab2:
             st.subheader("Distribución de Predicciones")
