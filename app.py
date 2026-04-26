@@ -6,17 +6,28 @@ from engine import run_analytics
 st.set_page_config(page_title="NBA Playoff Analytics", layout="wide")
 
 @st.cache_data(ttl=600) # Refresh every 10 mins
+
 def fetch_and_process():
-    # Auth (Use Streamlit Secrets in production)
+    # 1. Scope
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    
+    # 2. Extract credentials from Streamlit Secrets
+    # This reads the [gcp_service_account] section from your Secrets
+    creds_dict = st.secrets["gcp_service_account"]
+    
+    # 3. Use from_json_keyfile_dict instead of from_json_keyfile_name
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     
+    # 4. Open the sheet
     sh = client.open("NBA_Playoffs_2026")
+    
+    # Rest of your code...
     responses = pd.DataFrame(sh.worksheet("Responses_R1").get_all_records())
     status = pd.DataFrame(sh.worksheet("Series_Status").get_all_records())
     
     return run_analytics(responses, status)
+    
 
 st.title("🏀 NBA Playoff Betting: Live Insights")
 
