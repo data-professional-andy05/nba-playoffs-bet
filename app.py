@@ -20,35 +20,28 @@ def fetch_data():
     playin = pd.DataFrame(sh.worksheet("PlayIn_Score").get_all_records())
     
     leaderboard = run_analytics(responses, status, playin)
-    return leaderboard, responses
+    return leaderboard, responses, status, playin
 
 st.title("🏀 NBA Playoffs 2026")
 
 try:
-    df_leaderboard, df_raw = fetch_data()
+    df_l, df_r, df_s, df_p = fetch_data()
     
-    if df_leaderboard is not None and not df_leaderboard.empty:
-        tab1, tab2, tab3 = st.tabs(["🏆 Standings", "📊 Consensus", "🔍 All Predictions"])
+    if df_l is not None and not df_l.empty:
+        t1, t2, t3 = st.tabs(["🏆 Standings", "📊 Consensus", "🔍 All Predictions"])
 
-        with tab1:
-            st.subheader("Leaderboard")
-            st.write("Top 15 are Safe (Green). Bottom 6 to Losers Bracket (Red).")
-
-            # UI Styling: Forced Black Text, Bold, and Proper Contrast
+        with t1:
             def style_rows(row):
                 if row.name < 15:
                     return ['background-color: #90ee90; color: black; font-weight: bold'] * len(row)
-                return ['background-color: #ffcccb; color: black; font-weight: normal'] * len(row)
+                return ['background-color: #ffcccb; color: black'] * len(row)
 
-            # Defensive Column Dropping
-            display_df = df_leaderboard.copy()
-            if 'Email' in display_df.columns:
-                display_df = display_df.drop(columns=['Email'])
+            disp = df_l.drop(columns=['Email']) if 'Email' in df_l.columns else df_l
 
             st.dataframe(
-                display_df.style.apply(style_rows, axis=1).format({"EV": "{:.2f}"}),
+                disp.style.apply(style_rows, axis=1).format({"EV": "{:.2f}"}),
                 use_container_width=True,
-                height=750,
+                height=700,
                 column_config={
                     "Name": st.column_config.TextColumn("Bettor", width="medium"),
                     "Real": st.column_config.NumberColumn("Points", width="small", format="%d"),
@@ -58,23 +51,28 @@ try:
                 }
             )
 
-        with tab2:
-            st.subheader("Consensus Summary")
-            series_cols = [c for c in df_raw.columns if " vs " in c]
+        with t2:
+            st.subheader("Group Consensus")
+            series_cols = [c for c in df_r.columns if " vs " in c]
             if series_cols:
-                melted = df_raw.melt(id_vars=['Nombre'], value_vars=series_cols, var_name='Series', value_name='Pred')
-                melted['Winner'] = melted['Pred'].str.split(" ").str[0]
-                summary = melted.groupby(['Series', 'Winner']).size().reset_index(name='Votes')
-                fig = px.bar(summary, x='Series', y='Votes', color='Winner', barmode='stack', text='Votes')
+                m = df_r.melt(id_vars=['Nombre'], value_vars=series_cols, var_name='Series', value_name='Pred')
+                m['Winner'] = m['Pred'].str.split(" ").str[0]
+                sum_df = m.groupby(['Series', 'Winner']).size().reset_index(name='Votes')
+                fig = px.bar(sum_df, x='Series', y='Votes', color='Winner', barmode='stack', text='Votes')
                 st.plotly_chart(fig, use_container_width=True)
 
-        with tab3:
-            st.subheader("Transparency Grid")
-            cols_to_drop = ['Marca temporal', 'Dirección de correo electrónico']
-            clean_raw = df_raw.drop(columns=[c for c in cols_to_drop if c in df_raw.columns])
-            st.dataframe(clean_raw, use_container_width=True)
+        with t3:
+            st.subheader("Raw Prediction Data")
+            drop_cols = ['Marca temporal', 'Dirección de correo electrónico']
+            st.dataframe(df_r.drop(columns=[c for c in drop_cols if c in df_r.columns]), use_container_width=True)
+            
     else:
-        st.warning("No data found. Please check your Google Sheets.")
+        st.error("No leaderboard data was generated.")
+        with st.expander("Diagnostic Info - Check your Sheet Data"):
+            st.write(f"Responses Found: {len(df_r)}")
+            st.write(f"Series Status Rows: {len(df_s)}")
+            st.write(f"PlayIn Rows: {len(df_p)}")
+            st.write("Series Columns detected:", [c for c in df_r.columns if " vs " in c])
 
 except Exception as e:
-    st.error(f"Error: {e}")
+    st.error(f"Critical Error: {e}")
