@@ -2,11 +2,10 @@ import pandas as pd
 import numpy as np
 
 def parse_pred(pred_str):
-    """Parses 'Pistons 4-1 Magic' into dict"""
     if not pred_str or pd.isna(pred_str) or 'vs' in pred_str:
         return None
     try:
-        parts = pred_str.split(" ")
+        parts = str(pred_str).split(" ")
         winner = parts[0]
         score = parts[1].split("-")
         g1, g2 = int(score[0]), int(score[1])
@@ -15,7 +14,6 @@ def parse_pred(pred_str):
         return None
 
 def get_series_outcomes(p_a, s_a, s_b):
-    """Calculates probability of all paths to 4 wins given single-game prob p_a"""
     memo = {}
     def find_path(curr_a, curr_b):
         if curr_a == 4 or curr_b == 4:
@@ -23,10 +21,8 @@ def get_series_outcomes(p_a, s_a, s_b):
         state = (curr_a, curr_b)
         if state in memo: return memo[state]
         res = {}
-        # Path 1: Team A wins next game
         for (f_a, f_b), prob in find_path(curr_a + 1, curr_b).items():
             res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * p_a
-        # Path 2: Team B wins next game
         for (f_a, f_b), prob in find_path(curr_a, curr_b + 1).items():
             res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * (1 - p_a)
         memo[state] = res
@@ -37,7 +33,7 @@ def run_analytics(responses_df, status_df, playin_df):
     series_cols = [c for c in responses_df.columns if " vs " in c]
     status_dict = status_df.set_index('Series_ID').to_dict('index')
     
-    # 1. Consensus Probabilities (The Crowd)
+    # 1. Consensus
     crowd_probs = {}
     for col in series_cols:
         t_a = col.split(" vs ")[0]
@@ -49,11 +45,10 @@ def run_analytics(responses_df, status_df, playin_df):
                 wins_a += 4 if p['winner'] == t_a else (p['total'] - 4)
         crowd_probs[col] = wins_a / total_g if total_g > 0 else 0.5
 
-    # 2. Individual Calculations
     user_results = []
     for _, user in responses_df.iterrows():
         real_pts, ev_pts, max_pts = 0, 0, 0
-        email = user['Dirección de correo electrónico']
+        email = user.get('Dirección de correo electrónico', 'N/A')
         
         for col in series_cols:
             stat = status_dict.get(col)
@@ -63,7 +58,6 @@ def run_analytics(responses_df, status_df, playin_df):
             t_a, t_b = col.split(" vs ")
             s_a, s_b = int(stat['Games_Team_A']), int(stat['Games_Team_B'])
             
-            # Probability Model
             n = s_a + s_b
             p_c = crowd_probs[col]
             p_l = (s_a / n) if n > 0 else 0.5
@@ -85,3 +79,25 @@ def run_analytics(responses_df, status_df, playin_df):
             
             if s_a == 4 or s_b == 4:
                 final = 0
+                win = t_a if s_a == 4 else t_b
+                if pred['winner'] == win:
+                    final += 1
+                    if pred['total'] == (s_a + s_b): final += 2
+                real_pts += final; ev_pts += final; max_pts += final
+            else:
+                ev_pts += match_ev
+                max_pts += max(possible_pts_match) if possible_pts_match else 0
+
+        user_results.append({
+            "Email": email, "Name": user['Nombre'], 
+            "Real": int(real_pts), "EV": float(ev_pts), "Max": int(max_pts)
+        })
+
+    leaderboard = pd.DataFrame(user_results)
+    if not leaderboard.empty:
+        leaderboard = leaderboard.merge(playin_df[['Email', 'Score']], on='Email', how='left').fillna(0)
+        leaderboard['Score'] = leaderboard['Score'].astype(int)
+        leaderboard = leaderboard.rename(columns={'Score': 'PlayIn'})
+        leaderboard = leaderboard.sort_values(by=["Real", "EV", "PlayIn"], ascending=False).reset_index(drop=True)
+    
+    return leaderboard
