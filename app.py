@@ -152,13 +152,13 @@ def cargar_todo():
     l = procesar_datos(r, s, p)
     return l, r
 
-st.title("🏀 Quiniela NBA Playoffs 2026")
+st.title("🏀 Apuestas NBA Playoffs 2026")
 
 try:
     df_l, df_r = cargar_todo()
 
     if df_l is not None and not df_l.empty:
-        tab1, tab2, tab3 = st.tabs(["🏆 Tabla de Posiciones", "📊 Consenso del Grupo", "🔍 Registro de Predicciones"])
+        tab1, tab2, tab3 = st.tabs(["🏆 Tabla de Posiciones", "📊 Resumen por Serie", "🔍 Registro de Predicciones"])
 
         with tab1:
             st.markdown("### Clasificación en Vivo")
