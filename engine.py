@@ -8,98 +8,121 @@ def parse_pred(pred_str):
         winner = parts[0]
         score = parts[1].split("-")
         g1, g2 = int(score[0]), int(score[1])
-        return {"winner": winner, "total": g1 + g2, "high": g1, "low": g2}
+        return {"winner": winner, "total": g1 + g2}
     except:
         return None
 
-def get_series_probability(team_a_prob, curr_a, curr_b):
+def get_series_outcomes(p_a, s_a, s_b):
+    """
+    Calculates the probability of every possible final result (4-0...0-4)
+    given current score (s_a, s_b) and probability p_a of Team A winning a single game.
+    """
+    # outcomes[(final_a, final_b)] = prob
+    outcomes = {}
+    
+    # Simple recursive path finding with memoization
     memo = {}
-    def p_reach(target_a, target_b, cur_a, cur_b, p):
-        if cur_a == 4 or cur_b == 4:
-            return 1.0 if (cur_a == target_a and cur_b == target_b) else 0.0
-        state = (cur_a, cur_b)
+    def find_path(curr_a, curr_b):
+        if curr_a == 4 or curr_b == 4:
+            return {(curr_a, curr_b): 1.0}
+        
+        state = (curr_a, curr_b)
         if state in memo: return memo[state]
-        prob = p * p_reach(target_a, target_b, cur_a + 1, cur_b, p) + \
-               (1-p) * p_reach(target_a, target_b, cur_a, cur_b + 1, p)
-        memo[state] = prob
-        return prob
+        
+        res = {}
+        # Path 1: Team A wins next game
+        for (f_a, f_b), prob in find_path(curr_a + 1, curr_b).items():
+            res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * p_a
+        
+        # Path 2: Team B wins next game
+        for (f_a, f_b), prob in find_path(curr_a, curr_b + 1).items():
+            res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * (1 - p_a)
+            
+        memo[state] = res
+        return res
 
-    results = {}
-    for b_f in range(4): results[(4, b_f)] = p_reach(4, b_f, curr_a, curr_b, team_a_prob)
-    for a_f in range(4): results[(a_f, 4)] = p_reach(a_f, 4, curr_a, curr_b, team_a_prob)
-    return results
+    return find_path(s_a, s_b)
 
 def run_analytics(responses_df, status_df, playin_df):
     series_cols = [c for c in responses_df.columns if "vs" in c]
     status_dict = status_df.set_index('Series_ID').to_dict('index')
     
-    # 1. Calculate Crowd Source Probabilities
+    # 1. Calculate Crowd Probs (Used to anchor the model)
     crowd_probs = {}
     for col in series_cols:
-        team_a_name = col.split(" vs ")[0]
+        t_a = col.split(" vs ")[0]
         wins_a, total_g = 0, 0
         for val in responses_df[col]:
             p = parse_pred(val)
             if p:
                 total_g += p['total']
-                wins_a += p['high'] if p['winner'] == team_a_name else p['low']
+                # If winner is team A, they were predicted to win 4 games
+                wins_a += 4 if p['winner'] == t_a else (p['total'] - 4)
         crowd_probs[col] = wins_a / total_g if total_g > 0 else 0.5
 
-    # 2. Process Standings
     user_results = []
     for _, user in responses_df.iterrows():
         real_pts, ev_pts, max_pts = 0, 0, 0
-        email = user['Dirección de correo electrónico']
         
         for col in series_cols:
             stat = status_dict.get(col)
             pred = parse_pred(user[col])
             if not pred or not stat: continue
             
-            # Logic: Split Series_ID to get team names
-            teams = col.split(" vs ")
-            team_a, team_b = teams[0], teams[1]
-            s_a, s_b = stat['Games_Team_A'], stat['Games_Team_B']
-            
-            n = s_a + s_b
-            is_finished = (s_a == 4 or s_b == 4)
+            t_a, t_b = col.split(" vs ")
+            s_a, s_b = int(stat['Games_Team_A']), int(stat['Games_Team_B'])
             
             # Probability Blending
-            p_crowd = crowd_probs[col]
-            p_live = (s_a / n) if n > 0 else 0.5
+            n = s_a + s_b
+            p_c = crowd_probs[col]
+            p_l = (s_a / n) if n > 0 else 0.5
             w = min(n / 6, 1.0)
-            p_final_a = (w * p_live) + ((1 - w) * p_crowd)
+            p_final_a = (w * p_l) + ((1 - w) * p_c)
             
-            outcomes = get_series_probability(p_final_a, s_a, s_b)
+            # All possible final outcomes from current score
+            outcomes = get_series_outcomes(p_final_a, s_a, s_b)
             
-            # Map Points
-            user_points_map = {}
-            for a in range(5):
-                for b in range(5):
-                    if a < 4 and b < 4: continue
-                    if a == b: continue
-                    pts = 0
-                    winner = team_a if a == 4 else team_b
-                    if pred['winner'] == winner:
-                        pts += 1
-                        if pred['total'] == (a + b): pts += 2
-                    user_points_map[(a, b)] = pts
-
-            if is_finished:
-                p = user_points_map.get((s_a, s_b), 0)
-                real_pts += p; ev_pts += p; max_pts += p
+            # Map points for every final outcome
+            possible_points_for_this_match = []
+            match_ev = 0
+            
+            for (f_a, f_b), prob in outcomes.items():
+                pts = 0
+                final_winner = t_a if f_a == 4 else t_b
+                if pred['winner'] == final_winner:
+                    pts += 1 # Winner point
+                    if pred['total'] == (f_a + f_b):
+                        pts += 2 # Exact bonus
+                
+                match_ev += pts * prob
+                if prob > 0:
+                    possible_points_for_this_match.append(pts)
+            
+            # Logic: If series is over (someone has 4 wins)
+            if s_a == 4 or s_b == 4:
+                final_pts = 0
+                win = t_a if s_a == 4 else t_b
+                if pred['winner'] == win:
+                    final_pts += 1
+                    if pred['total'] == (s_a + s_b): final_pts += 2
+                real_pts += final_pts
+                ev_pts += final_pts
+                max_pts += final_pts
             else:
-                ev_pts += sum(prob * user_points_map.get(out, 0) for out, prob in outcomes.items())
-                possible = [user_points_map.get(out) for out, prob in outcomes.items() if prob > 0]
-                max_pts += max(possible) if possible else 0
+                ev_pts += match_ev
+                max_pts += max(possible_points_for_this_match) if possible_points_for_this_match else 0
 
-        user_results.append({"Email": email, "Name": user['Nombre'], "Real": real_pts, "EV": round(ev_pts, 2), "Max": max_pts})
+        user_results.append({
+            "Email": user['Dirección de correo electrónico'],
+            "Name": user['Nombre'],
+            "Real": int(real_pts),
+            "EV": round(ev_pts, 2),
+            "Max": int(max_pts)
+        })
 
     final_df = pd.DataFrame(user_results)
-    
-    # 3. Merge Tiebreak (PlayIn Score)
     final_df = final_df.merge(playin_df[['Email', 'Score']], on='Email', how='left').fillna(0)
-    final_df = final_df.rename(columns={'Score': 'Tiebreak_PlayIn'})
+    final_df = final_df.rename(columns={'Score': 'PlayIn_Tiebreak'})
     
-    # 4. Sort: Real Points first, then EV, then Tiebreak
-    return final_df.sort_values(by=["Real", "EV", "Tiebreak_PlayIn"], ascending=False).reset_index(drop=True)
+    # Senior DA Sorting: Real -> EV -> PlayIn Tiebreak
+    return final_df.sort_values(by=["Real", "EV", "PlayIn_Tiebreak"], ascending=False).reset_index(drop=True)
