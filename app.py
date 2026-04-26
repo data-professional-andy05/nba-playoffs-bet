@@ -135,7 +135,7 @@ def procesar_datos(resp_df, stat_df, playin_df):
             "Email": user[email_col], 
             "Participante": user[nombre_col], 
             "Puntos": int(puntos_reales), 
-            "EV": round(float(ev), 2), 
+            "Esperado": round(float(ev), 2), 
             "Máximo": int(max_posible)
         })
 
