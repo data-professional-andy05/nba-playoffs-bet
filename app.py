@@ -141,7 +141,7 @@ def procesar_datos(resp_df, stat_df, playin_df):
 
     lb = pd.DataFrame(resultados)
     
-    # 3. Cruce con Play-In para Desempates
+# 3. Cruce con Play-In para Desempates
     if not lb.empty:
         pi_email = next((c for c in playin_df.columns if 'correo' in c.lower() or 'email' in c.lower()), playin_df.columns[0])
         pi_score = next((c for c in playin_df.columns if 'score' in c.lower() or 'puntos' in c.lower()), playin_df.columns[1])
@@ -149,7 +149,12 @@ def procesar_datos(resp_df, stat_df, playin_df):
         pi_clean = playin_df[[pi_email, pi_score]].rename(columns={pi_email: 'Email', pi_score: 'PlayIn'})
         lb = lb.merge(pi_clean, on='Email', how='left').fillna(0)
         lb['PlayIn'] = lb['PlayIn'].astype(int)
+        
+        # Ordenar a los participantes
         lb = lb.sort_values(by=["Puntos", "EV", "PlayIn"], ascending=False).reset_index(drop=True)
+        
+        # --- NUEVO: Insertar la columna de Posición al principio (basada en el orden) ---
+        lb.insert(0, 'Posición', range(1, len(lb) + 1))
     
     return lb
 
@@ -182,7 +187,8 @@ try:
             st.write("Verde: Pasan a 2da Ronda (Top 15) | Rojo: Cuadro de Consolación")
 
             def aplicar_estilos(row):
-                # Color verde suave para clasificados, rojo suave para eliminados
+                # row.name es el índice (0-14 para los primeros 15). 
+                # Esto coloreará de verde de la Posición 1 a la 15, y rojo de la 16 en adelante.
                 color_fondo = "#90ee90" if row.name < 15 else "#ffcccb"
                 return [f'background-color: {color_fondo}; color: black; font-weight: bold'] * len(row)
 
@@ -194,15 +200,15 @@ try:
                 use_container_width=True,
                 height=700,
                 column_config={
+                    "Posición": st.column_config.NumberColumn("Pos.", width="small", format="%d"),
                     "Participante": st.column_config.TextColumn("Participante", width="medium", pinned=True),
                     "Puntos": st.column_config.NumberColumn("Puntos", width="small", format="%d"),
                     "EV": st.column_config.NumberColumn("EV", width="small"),
                     "Máximo": st.column_config.NumberColumn("Máximo", width="small", format="%d"),
                     "PlayIn": st.column_config.NumberColumn("Play-In", width="small", format="%d"),
                 },
-                hide_index=True
+                hide_index=True # Sigue ocultando el índice por defecto de pandas, dejando solo nuestra columna "Posición"
             )
-
         with tab2:
             st.subheader("Distribución de Predicciones")
             series_cols = [c for c in df_r.columns if " vs " in c]
