@@ -205,7 +205,7 @@ try:
             vista_df = vista_df.drop(columns=['Posición'])
 
             st.dataframe(
-                vista_df.style.apply(aplicar_estilos, axis=1).format({"EV": "{:.2f}"}),
+                vista_df.style.apply(aplicar_estilos, axis=1).format({"Esperado": "{:.2f}"}),
                 use_container_width=True,
                 height=700,
                 column_config={
