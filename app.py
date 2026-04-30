@@ -8,23 +8,39 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 
-# --- 2. CSS PARA CENTRADO Y TAMAÑO DE FUENTE ---
-# Esto afectará a la tabla estática (st.table)
+# --- 2. CSS PARA CENTRADO, TAMAÑO, LÍNEAS Y ANCHO DE COLUMNA ---
 st.markdown("""
     <style>
-    /* Centrar todo el texto de la tabla y aumentar tamaño */
+    /* Estilo para los encabezados */
     [data-testid="stTable"] th {
         text-align: center !important;
-        font-size: 20px !important;
+        font-size: 18px !important;
         background-color: #1e1e1e !important;
         color: white !important;
+        padding: 15px !important;
     }
+    
+    /* Estilo para las celdas (Valores) */
     [data-testid="stTable"] td {
         text-align: center !important;
-        font-size: 22px !important; /* Valores más grandes */
+        font-size: 20px !important; 
         vertical-align: middle !important;
+        color: black !important; /* Texto siempre negro */
+        border-bottom: 1px solid #444 !important; /* Líneas divisorias */
+        padding: 12px !important;
     }
-    /* Eliminar el scroll: st.table ya es estática por naturaleza */
+
+    /* Ajuste de ancho para la columna Participante (Columna 1) */
+    [data-testid="stTable"] td:nth-child(1), 
+    [data-testid="stTable"] th:nth-child(1) {
+        min-width: 280px !important; /* Evita que se comprima en el móvil */
+        text-align: center !important;
+    }
+
+    /* Forzar que la tabla use el ancho total */
+    [data-testid="stTable"] {
+        width: 100% !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -170,22 +186,22 @@ try:
 
         with tab1:
             st.markdown("### Clasificación en Vivo")
+            st.write("Verde: Top 15 | Rojo: Consolación")
             
-            # Limpieza del dataframe para visualización
             vista_df = df_l.copy()
             if 'Email' in vista_df.columns:
                 vista_df = vista_df.drop(columns=['Email'])
             
-            # Combinar Posición y Nombre
             vista_df['Participante'] = vista_df['Posición'].astype(str) + " - " + vista_df['Participante']
             vista_df = vista_df.drop(columns=['Posición'])
 
             # Función de colores para las filas
             def aplicar_colores(row):
-                color = "background-color: #90ee90" if row.name < 15 else "background-color: #ffcccb"
-                return [color] * len(row)
+                # Mantener los colores de fondo, pero el color de texto se fuerza en el CSS
+                bg = "background-color: #90ee90" if row.name < 15 else "background-color: #ffcccb"
+                return [bg] * len(row)
 
-            # Renderizar usando st.table (Sin scroll, Centrado por CSS, Fuente grande por CSS)
+            # Usar st.table para visualización estática sin scroll
             st.table(vista_df.style.apply(aplicar_colores, axis=1).format({"Esperado": "{:.2f}"}))
 
         with tab2:
