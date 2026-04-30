@@ -8,38 +8,60 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 
-# --- 2. CSS PARA CENTRADO, TAMAÑO, LÍNEAS Y ANCHO DE COLUMNA ---
+# --- 2. CSS PARA CENTRADO, TAMAÑO, LÍNEAS, ANCHO Y COLUMNA FIJA ---
 st.markdown("""
     <style>
-    /* Estilo para los encabezados */
+    /* Contenedor para permitir scroll horizontal con columna fija */
+    [data-testid="stTable"] {
+        display: block;
+        overflow-x: auto;
+        white-space: nowrap;
+    }
+
+    /* Estilo general de encabezados */
     [data-testid="stTable"] th {
         text-align: center !important;
-        font-size: 18px !important;
+        font-size: 17px !important;
         background-color: #1e1e1e !important;
         color: white !important;
-        padding: 15px !important;
+        padding: 12px !important;
+        border-right: 1px solid #444 !important; /* Separador de columna */
     }
     
-    /* Estilo para las celdas (Valores) */
+    /* Estilo de las celdas (Valores) */
     [data-testid="stTable"] td {
         text-align: center !important;
         font-size: 20px !important; 
         vertical-align: middle !important;
-        color: black !important; /* Texto siempre negro */
-        border-bottom: 1px solid #444 !important; /* Líneas divisorias */
-        padding: 12px !important;
+        color: black !important; /* Fuente negra siempre */
+        border-bottom: 1px solid #ddd !important; /* Separador de fila */
+        border-right: 1px solid #eee !important; /* Separador de columna (más claro) */
+        padding: 10px !important;
     }
 
-    /* Ajuste de ancho para la columna Participante (Columna 1) */
+    /* COLUMNA PARTICIPANTE FIJA (STICKY) */
     [data-testid="stTable"] td:nth-child(1), 
     [data-testid="stTable"] th:nth-child(1) {
-        min-width: 280px !important; /* Evita que se comprima en el móvil */
-        text-align: center !important;
+        position: -webkit-sticky;
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        min-width: 220px !important;
+        max-width: 220px !important;
+        background-color: inherit; /* Mantiene el verde/rojo de la fila */
+        border-right: 2px solid #999 !important; /* Línea más oscura para separar del resto */
     }
 
-    /* Forzar que la tabla use el ancho total */
-    [data-testid="stTable"] {
-        width: 100% !important;
+    /* Z-index mayor para el encabezado fijo */
+    [data-testid="stTable"] th:nth-child(1) {
+        z-index: 3;
+        background-color: #1e1e1e !important;
+    }
+
+    /* Eliminar borde derecho en la última columna */
+    [data-testid="stTable"] td:last-child, 
+    [data-testid="stTable"] th:last-child {
+        border-right: none !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -129,7 +151,6 @@ def procesar_datos(resp_df, stat_df, playin_df):
                     if pred['total_juegos'] == (f_a + f_b): pts += 2
                 m_ev += pts * prob
                 if prob > 0: pts_posibles_match.append(pts)
-            
             if s_a == 4 or s_b == 4:
                 final = 0
                 w_real = t_a if s_a == 4 else t_b
@@ -186,26 +207,30 @@ try:
 
         with tab1:
             st.markdown("### Clasificación en Vivo")
-            st.write("Verde: Top 15 | Rojo: Consolación")
             
             vista_df = df_l.copy()
             if 'Email' in vista_df.columns:
                 vista_df = vista_df.drop(columns=['Email'])
             
-            vista_df['Participante'] = vista_df['Posición'].astype(str) + " - " + vista_df['Participante']
+            # --- TRUNCAR NOMBRE Y UNIR CON POSICIÓN ---
+            def format_name(row):
+                name = str(row['Participante'])
+                # Truncar a 18 caracteres para mantener ancho fijo
+                short_name = name[:18] + ".." if len(name) > 18 else name
+                return f"{row['Posición']} - {short_name}"
+
+            vista_df['Participante'] = vista_df.apply(format_name, axis=1)
             vista_df = vista_df.drop(columns=['Posición'])
 
-            # Función de colores para las filas
             def aplicar_colores(row):
-                # Mantener los colores de fondo, pero el color de texto se fuerza en el CSS
                 bg = "background-color: #90ee90" if row.name < 15 else "background-color: #ffcccb"
                 return [bg] * len(row)
 
-            # Usar st.table para visualización estática sin scroll
+            # Mostrar tabla
             st.table(vista_df.style.apply(aplicar_colores, axis=1).format({"Esperado": "{:.2f}"}))
 
         with tab2:
-            st.subheader("Distribución de Predicciones")
+            st.subheader("Distribución de Votos")
             series_cols = [c for c in df_r.columns if " vs " in c]
             if series_cols:
                 melted = df_r.melt(id_vars=[df_r.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
@@ -219,7 +244,7 @@ try:
                 st.plotly_chart(fig, use_container_width=True)
 
         with tab3:
-            st.subheader("Grid de Transparencia")
+            st.subheader("Registro de Datos")
             cols_ocultar = ['Marca temporal', 'Dirección de correo electrónico']
             grid_raw = df_r.drop(columns=[c for c in cols_ocultar if c in df_r.columns])
             st.dataframe(grid_raw, use_container_width=True)
