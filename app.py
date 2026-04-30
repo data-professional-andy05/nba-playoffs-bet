@@ -8,7 +8,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 
-# --- 2. CSS PARA CENTRADO, TAMAÑO, LÍNEAS, ANCHO Y COLUMNA FIJA ---
+# --- 2. CSS PARA CENTRADO, TAMAÑO, LÍNEAS OSCURAS Y COLUMNA FIJA ---
 st.markdown("""
     <style>
     /* Contenedor para permitir scroll horizontal con columna fija */
@@ -25,7 +25,8 @@ st.markdown("""
         background-color: #1e1e1e !important;
         color: white !important;
         padding: 12px !important;
-        border-right: 1px solid #444 !important; /* Separador de columna */
+        border-right: 2px solid #555 !important; /* Separador de columna oscuro */
+        border-bottom: 3px solid #000 !important;
     }
     
     /* Estilo de las celdas (Valores) */
@@ -34,8 +35,8 @@ st.markdown("""
         font-size: 20px !important; 
         vertical-align: middle !important;
         color: black !important; /* Fuente negra siempre */
-        border-bottom: 1px solid #ddd !important; /* Separador de fila */
-        border-right: 1px solid #eee !important; /* Separador de columna (más claro) */
+        border-bottom: 2px solid #666 !important; /* Líneas de fila más oscuras */
+        border-right: 1.5px solid #888 !important; /* Líneas de columna más oscuras */
         padding: 10px !important;
     }
 
@@ -46,10 +47,10 @@ st.markdown("""
         position: sticky;
         left: 0;
         z-index: 2;
-        min-width: 220px !important;
-        max-width: 220px !important;
-        background-color: inherit; /* Mantiene el verde/rojo de la fila */
-        border-right: 2px solid #999 !important; /* Línea más oscura para separar del resto */
+        min-width: 180px !important; /* Ancho reducido para ~18 caracteres */
+        max-width: 180px !important;
+        background-color: inherit; 
+        border-right: 3px solid #333 !important; /* Separador lateral fuerte */
     }
 
     /* Z-index mayor para el encabezado fijo */
@@ -212,10 +213,10 @@ try:
             if 'Email' in vista_df.columns:
                 vista_df = vista_df.drop(columns=['Email'])
             
-            # --- TRUNCAR NOMBRE Y UNIR CON POSICIÓN ---
+            # --- TRUNCAR NOMBRE A 18 CARACTERES ---
             def format_name(row):
                 name = str(row['Participante'])
-                # Truncar a 18 caracteres para mantener ancho fijo
+                # Límite estricto de 18 caracteres
                 short_name = name[:18] + ".." if len(name) > 18 else name
                 return f"{row['Posición']} - {short_name}"
 
@@ -226,7 +227,7 @@ try:
                 bg = "background-color: #90ee90" if row.name < 15 else "background-color: #ffcccb"
                 return [bg] * len(row)
 
-            # Mostrar tabla
+            # Mostrar tabla estática
             st.table(vista_df.style.apply(aplicar_colores, axis=1).format({"Esperado": "{:.2f}"}))
 
         with tab2:
