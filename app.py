@@ -8,6 +8,20 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 
+# --- CSS PERSONALIZADO PARA ENCABEZADOS Y FUENTE ---
+st.markdown("""
+    <style>
+    /* Centrar encabezados de las tablas */
+    th {
+        text-align: center !important;
+    }
+    /* Forzar que el contenedor de la tabla use todo el espacio */
+    [data-testid="stDataFrame"] {
+        width: 100%;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- LÓGICA DE PROCESAMIENTO ---
 
 def parse_prediccion(pred_str):
@@ -20,7 +34,6 @@ def parse_prediccion(pred_str):
     try:
         partes = s.split(" ")
         
-        # Buscar el índice donde está el marcador numérico (ej. "4-1", "2-4")
         idx_marcador = -1
         for i, parte in enumerate(partes):
             if "-" in parte and parte.replace("-", "").isdigit():
@@ -36,7 +49,6 @@ def parse_prediccion(pred_str):
         marcador = partes[idx_marcador].split("-")
         g1, g2 = int(marcador[0]), int(marcador[1])
         
-        # El ganador es el equipo con más victorias
         ganador = equipo_a if g1 > g2 else equipo_b
         
         return {"ganador": ganador, "total_juegos": g1 + g2}
@@ -52,10 +64,8 @@ def calcular_probabilidades_serie(p_a, s_a, s_b):
         estado = (curr_a, curr_b)
         if estado in memo: return memo[estado]
         res = {}
-        # Camino: Gana Equipo A el siguiente
         for (f_a, f_b), prob in encontrar_camino(curr_a + 1, curr_b).items():
             res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * p_a
-        # Camino: Gana Equipo B el siguiente
         for (f_a, f_b), prob in encontrar_camino(curr_a, curr_b + 1).items():
             res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * (1 - p_a)
         memo[estado] = res
@@ -64,7 +74,6 @@ def calcular_probabilidades_serie(p_a, s_a, s_b):
 
 def procesar_datos(resp_df, stat_df, playin_df):
     """Motor de cálculo principal."""
-    # Estandarización de nombres de columnas
     resp_df.columns = [c.strip() for c in resp_df.columns]
     stat_df.columns = [c.strip() for c in stat_df.columns]
     playin_df.columns = [c.strip() for c in playin_df.columns]
@@ -75,7 +84,6 @@ def procesar_datos(resp_df, stat_df, playin_df):
     nombre_col = next((c for c in resp_df.columns if 'nombre' in c.lower()), resp_df.columns[2])
     email_col = next((c for c in resp_df.columns if 'correo' in c.lower() or 'email' in c.lower()), resp_df.columns[1])
 
-    # 1. Probabilidades del Consenso (Crowd Source)
     crowd_probs = {}
     for col in series_cols:
         t_a = col.split(" vs ")[0]
@@ -87,7 +95,6 @@ def procesar_datos(resp_df, stat_df, playin_df):
                 wins_a += 4 if p['ganador'] == t_a else (p['total_juegos'] - 4)
         crowd_probs[col] = wins_a / total_g if total_g > 0 else 0.5
 
-    # 2. Bucle de cálculo por usuario
     resultados = []
     for _, user in resp_df.iterrows():
         puntos_reales, ev, max_posible = 0, 0, 0
@@ -100,7 +107,6 @@ def procesar_datos(resp_df, stat_df, playin_df):
             t_a, t_b = col.split(" vs ")
             s_a, s_b = int(stat.get('Games_Team_A', 0)), int(stat.get('Games_Team_B', 0))
             
-            # Modelo de Probabilidad Combinado
             n = s_a + s_b
             p_c = crowd_probs[col]
             p_l = (s_a / n) if n > 0 else 0.5
@@ -141,7 +147,6 @@ def procesar_datos(resp_df, stat_df, playin_df):
 
     lb = pd.DataFrame(resultados)
     
-# 3. Cruce con Play-In para Desempates
     if not lb.empty:
         pi_email = next((c for c in playin_df.columns if 'correo' in c.lower() or 'email' in c.lower()), playin_df.columns[0])
         pi_score = next((c for c in playin_df.columns if 'score' in c.lower() or 'puntos' in c.lower()), playin_df.columns[1])
@@ -150,10 +155,7 @@ def procesar_datos(resp_df, stat_df, playin_df):
         lb = lb.merge(pi_clean, on='Email', how='left').fillna(0)
         lb['PlayIn'] = lb['PlayIn'].astype(int)
         
-        # Ordenar a los participantes
         lb = lb.sort_values(by=["Puntos", "Esperado", "PlayIn"], ascending=False).reset_index(drop=True)
-        
-        # --- NUEVO: Insertar la columna de Posición al principio (basada en el orden) ---
         lb.insert(0, 'Posición', range(1, len(lb) + 1))
     
     return lb
@@ -187,32 +189,31 @@ try:
             st.write("Verde: Pasan a 2da Ronda (Top 15) | Rojo: Cuadro de Consolación")
 
             def aplicar_estilos(row):
-                # row.name es el índice (0-14 para los primeros 15). 
+                # Aplicamos color de fondo, centrado y tamaño de fuente más grande
                 color_fondo = "#90ee90" if row.name < 15 else "#ffcccb"
-                return [f'background-color: {color_fondo}; color: black; font-weight: bold'] * len(row)
+                return [
+                    f'background-color: {color_fondo}; color: black; font-weight: bold; text-align: center; font-size: 16px;'
+                ] * len(row)
 
-            # Creamos una copia para la vista para no afectar el dataframe original
             vista_df = df_l.copy()
             if 'Email' in vista_df.columns:
                 vista_df = vista_df.drop(columns=['Email'])
                 
-            # Si no tenías la columna Posición, la creamos. Si ya la tenías, la usamos.
             if 'Posición' not in vista_df.columns:
                 vista_df.insert(0, 'Posición', range(1, len(vista_df) + 1))
             
-            # --- LA MAGIA: Concatenamos "1 - Participante" y borramos la columna extra ---
             vista_df['Participante'] = vista_df['Posición'].astype(str) + " - " + vista_df['Participante']
             vista_df = vista_df.drop(columns=['Posición'])
 
+            # Para mostrar TODOS los jugadores sin scroll, eliminamos el parámetro 'height'
+            # y usamos 'use_container_width'
             st.dataframe(
                 vista_df.style.apply(aplicar_estilos, axis=1).format({"Esperado": "{:.2f}"}),
                 use_container_width=True,
-                height=700,
                 column_config={
-                    # La columna Participante ahora tiene el número y está anclada (pinned) a la izquierda
                     "Participante": st.column_config.TextColumn("Participante", width="medium", pinned=True),
                     "Puntos": st.column_config.NumberColumn("Puntos", width="small", format="%d"),
-                    "EV": st.column_config.NumberColumn("EV", width="small"),
+                    "Esperado": st.column_config.NumberColumn("EV", width="small"),
                     "Máximo": st.column_config.NumberColumn("Máximo", width="small", format="%d"),
                     "PlayIn": st.column_config.NumberColumn("Play-In", width="small", format="%d"),
                 },
@@ -224,14 +225,11 @@ try:
             if series_cols:
                 melted = df_r.melt(id_vars=[df_r.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
                 
-                # Usamos la función parse_prediccion para extraer al verdadero ganador
                 def extraer_ganador(pred):
                     resultado = parse_prediccion(pred)
                     return resultado['ganador'] if resultado else "N/A"
                     
                 melted['Ganador'] = melted['Pred'].apply(extraer_ganador)
-                
-                # Opcional: Filtrar predicciones vacías o N/A para no ensuciar el gráfico
                 melted = melted[melted['Ganador'] != "N/A"]
                 
                 resumen_votos = melted.groupby(['Serie', 'Ganador']).size().reset_index(name='Votos')
