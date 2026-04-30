@@ -5,10 +5,30 @@ import gspread
 import plotly.express as px
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- 1. CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 
-# --- LÓGICA DE PROCESAMIENTO ---
+# --- 2. CSS PARA CENTRADO Y TAMAÑO DE FUENTE ---
+# Esto afectará a la tabla estática (st.table)
+st.markdown("""
+    <style>
+    /* Centrar todo el texto de la tabla y aumentar tamaño */
+    [data-testid="stTable"] th {
+        text-align: center !important;
+        font-size: 20px !important;
+        background-color: #1e1e1e !important;
+        color: white !important;
+    }
+    [data-testid="stTable"] td {
+        text-align: center !important;
+        font-size: 22px !important; /* Valores más grandes */
+        vertical-align: middle !important;
+    }
+    /* Eliminar el scroll: st.table ya es estática por naturaleza */
+    </style>
+""", unsafe_allow_html=True)
+
+# --- 3. LÓGICA DE PROCESAMIENTO ---
 
 def parse_prediccion(pred_str):
     if not pred_str or pd.isna(pred_str):
@@ -93,6 +113,7 @@ def procesar_datos(resp_df, stat_df, playin_df):
                     if pred['total_juegos'] == (f_a + f_b): pts += 2
                 m_ev += pts * prob
                 if prob > 0: pts_posibles_match.append(pts)
+            
             if s_a == 4 or s_b == 4:
                 final = 0
                 w_real = t_a if s_a == 4 else t_b
@@ -108,7 +129,7 @@ def procesar_datos(resp_df, stat_df, playin_df):
             "Email": user[email_col], 
             "Participante": user[nombre_col], 
             "Puntos": int(puntos_reales), 
-            "EV": round(float(ev), 2), 
+            "Esperado": round(float(ev), 2), 
             "Máximo": int(max_posible)
         })
 
@@ -119,9 +140,11 @@ def procesar_datos(resp_df, stat_df, playin_df):
         pi_clean = playin_df[[pi_email, pi_score]].rename(columns={pi_email: 'Email', pi_score: 'PlayIn'})
         lb = lb.merge(pi_clean, on='Email', how='left').fillna(0)
         lb['PlayIn'] = lb['PlayIn'].astype(int)
-        lb = lb.sort_values(by=["Puntos", "EV", "PlayIn"], ascending=False).reset_index(drop=True)
+        lb = lb.sort_values(by=["Puntos", "Esperado", "PlayIn"], ascending=False).reset_index(drop=True)
         lb.insert(0, 'Posición', range(1, len(lb) + 1))
     return lb
+
+# --- 4. CARGA DE DATOS ---
 
 @st.cache_data(ttl=60)
 def cargar_todo():
@@ -132,7 +155,10 @@ def cargar_todo():
     r = pd.DataFrame(sh.worksheet("Responses_R1").get_all_records())
     s = pd.DataFrame(sh.worksheet("Series_Status").get_all_records())
     p = pd.DataFrame(sh.worksheet("PlayIn_Score").get_all_records())
-    return procesar_datos(r, s, p), r
+    l = procesar_datos(r, s, p)
+    return l, r
+
+# --- 5. INTERFAZ ---
 
 st.title("🏀 Apuestas NBA Playoffs 2026")
 
@@ -144,45 +170,23 @@ try:
 
         with tab1:
             st.markdown("### Clasificación en Vivo")
-            st.write("Verde: Pasan a 2da Ronda (Top 15) | Rojo: Cuadro de Consolación")
-
-            # Preparar dataframe para mostrar
+            
+            # Limpieza del dataframe para visualización
             vista_df = df_l.copy()
-            if 'Email' in vista_df.columns: vista_df = vista_df.drop(columns=['Email'])
+            if 'Email' in vista_df.columns:
+                vista_df = vista_df.drop(columns=['Email'])
+            
+            # Combinar Posición y Nombre
             vista_df['Participante'] = vista_df['Posición'].astype(str) + " - " + vista_df['Participante']
             vista_df = vista_df.drop(columns=['Posición'])
 
-            # Lógica de Estilo HTML
-            def style_full_table(df):
-                # Aplicamos el estilo a las celdas
-                def get_row_style(row):
-                    color = "#90ee90" if row.name < 15 else "#ffcccb"
-                    return [f'background-color: {color}; color: black; font-weight: bold; text-align: center; font-size: 20px; border: 1px solid white;' for _ in row]
+            # Función de colores para las filas
+            def aplicar_colores(row):
+                color = "background-color: #90ee90" if row.name < 15 else "background-color: #ffcccb"
+                return [color] * len(row)
 
-                # Convertir a Styler
-                styler = df.style.apply(get_row_style, axis=1)
-                
-                # Configurar el HTML para que los encabezados también estén centrados y sean grandes
-                html = styler.to_html(index=False, escape=False)
-                
-                # Inyectar CSS extra para los headers (th) y quitar el scroll
-                custom_css = """
-                <style>
-                    table { width: 100%; border-collapse: collapse; }
-                    th { 
-                        background-color: #1e1e1e; 
-                        color: white; 
-                        text-align: center !important; 
-                        font-size: 22px !important; 
-                        padding: 10px;
-                    }
-                    td { padding: 12px !important; }
-                </style>
-                """
-                return custom_css + html
-
-            # Renderizar como HTML para evitar el canvas de Streamlit y permitir scroll infinito (no-scroll)
-            st.markdown(style_full_table(vista_df), unsafe_allow_html=True)
+            # Renderizar usando st.table (Sin scroll, Centrado por CSS, Fuente grande por CSS)
+            st.table(vista_df.style.apply(aplicar_colores, axis=1).format({"Esperado": "{:.2f}"}))
 
         with tab2:
             st.subheader("Distribución de Predicciones")
@@ -202,8 +206,7 @@ try:
             st.subheader("Grid de Transparencia")
             cols_ocultar = ['Marca temporal', 'Dirección de correo electrónico']
             grid_raw = df_r.drop(columns=[c for c in cols_ocultar if c in df_r.columns])
-            st.dataframe(grid_raw, use_container_width=True, hide_index=True)
-    else:
-        st.warning("No se generaron datos.")
+            st.dataframe(grid_raw, use_container_width=True)
+
 except Exception as e:
     st.error(f"Error: {e}")
