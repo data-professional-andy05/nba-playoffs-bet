@@ -5,70 +5,28 @@ import gspread
 import plotly.express as px
 from oauth2client.service_account import ServiceAccountCredentials
 
-# --- 1. CONFIGURACIÓN DE PÁGINA ---
+# --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 
-# --- 2. CSS PARA CENTRADO, TAMAÑO, LÍNEAS OSCURAS Y COLUMNA FIJA ---
 st.markdown("""
     <style>
-    [data-testid="stTable"] {
-        display: block;
-        overflow-x: auto;
-        white-space: nowrap;
-    }
-
-    [data-testid="stTable"] th {
-        text-align: center !important;
-        font-size: 17px !important;
-        background-color: #1e1e1e !important;
-        color: white !important;
-        padding: 12px !important;
-        border-right: 2px solid #555 !important;
-        border-bottom: 3px solid #000 !important;
-    }
-    
-    [data-testid="stTable"] td {
-        text-align: center !important;
-        font-size: 20px !important; 
-        vertical-align: middle !important;
-        color: black !important;
-        border-bottom: 2px solid #666 !important;
-        border-right: 1.5px solid #888 !important;
-        padding: 10px !important;
-    }
-
-    [data-testid="stTable"] td:nth-child(1), 
-    [data-testid="stTable"] th:nth-child(1) {
-        position: -webkit-sticky;
-        position: sticky;
-        left: 0;
-        z-index: 2;
-        min-width: 180px !important;
-        max-width: 180px !important;
-        background-color: inherit; 
-        border-right: 3px solid #333 !important;
-    }
-
-    [data-testid="stTable"] th:nth-child(1) {
-        z-index: 3;
-        background-color: #1e1e1e !important;
-    }
-
-    [data-testid="stTable"] td:last-child, 
-    [data-testid="stTable"] th:last-child {
-        border-right: none !important;
-    }
+    [data-testid="stTable"] { display: block; overflow-x: auto; white-space: nowrap; }
+    [data-testid="stTable"] th { text-align: center !important; font-size: 17px !important; background-color: #1e1e1e !important; color: white !important; padding: 12px !important; border-right: 2px solid #555 !important; border-bottom: 3px solid #000 !important; }
+    [data-testid="stTable"] td { text-align: center !important; font-size: 20px !important; vertical-align: middle !important; color: black !important; border-bottom: 2px solid #666 !important; border-right: 1.5px solid #888 !important; padding: 10px !important; }
+    [data-testid="stTable"] td:nth-child(1), [data-testid="stTable"] th:nth-child(1) { position: sticky; left: 0; z-index: 2; min-width: 180px !important; background-color: inherit; border-right: 3px solid #333 !important; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- 3. LÓGICA DE PROCESAMIENTO ---
+# --- 2. LÓGICA DE NORMALIZACIÓN Y PROCESAMIENTO ---
+
+def clean(text):
+    """Elimina espacios y convierte a minúsculas para comparaciones infalibles"""
+    if not text: return ""
+    return "".join(filter(str.isalnum, str(text))).lower()
 
 def parse_prediccion(pred_str):
-    if not pred_str or pd.isna(pred_str):
-        return None
+    if not pred_str or pd.isna(pred_str): return None
     s = str(pred_str).strip()
-    if "vs" in s.lower(): 
-        return None
     try:
         partes = s.split(" ")
         idx_marcador = -1
@@ -77,15 +35,11 @@ def parse_prediccion(pred_str):
                 idx_marcador = i
                 break
         if idx_marcador == -1: return None
-        
-        # El ganador se determina por el equipo que el usuario escribió junto al marcador mayor
         marcador = partes[idx_marcador].split("-")
         g1, g2 = int(marcador[0]), int(marcador[1])
-        
-        equipo_a = " ".join(partes[:idx_marcador]).strip()
-        equipo_b = " ".join(partes[idx_marcador+1:]).strip()
-        
-        ganador = equipo_a if g1 > g2 else equipo_b
+        eq_a = " ".join(partes[:idx_marcador])
+        eq_b = " ".join(partes[idx_marcador+1:])
+        ganador = eq_a if g1 > g2 else eq_b
         return {"ganador": ganador, "total_juegos": g1 + g2}
     except:
         return None
@@ -106,89 +60,82 @@ def calcular_probabilidades_serie(p_a, s_a, s_b):
     return encontrar_camino(s_a, s_b)
 
 def procesar_datos(resp_df, stat_df, playin_df):
+    # Normalizar nombres de columnas
     resp_df.columns = [c.strip() for c in resp_df.columns]
     stat_df.columns = [c.strip() for c in stat_df.columns]
-    playin_df.columns = [c.strip() for c in playin_df.columns]
     
     series_cols = [c for c in resp_df.columns if " vs " in c]
-    status_dict = {str(k).strip(): v for k, v in stat_df.set_index('Series_ID').to_dict('index').items()}
+    # Crear diccionario de estado usando IDs normalizados
+    status_dict = {clean(k): v for k, v in stat_df.set_index('Series_ID').to_dict('index').items()}
     
     nombre_col = next((c for c in resp_df.columns if 'nombre' in c.lower()), resp_df.columns[2])
     email_col = next((c for c in resp_df.columns if 'correo' in c.lower() or 'email' in c.lower()), resp_df.columns[1])
 
-    # 1. Calcular Probabilidad de la Multitud (Crowd) por Juego Individual
+    # 1. Probabilidades de la Multitud (Crowd)
     crowd_probs = {}
     for col in series_cols:
-        t_a = col.split(" vs ")[0].strip()
-        wins_a_total, games_total = 0, 0
+        t_a_name = col.split(" vs ")[0].strip()
+        wins_a, total_g = 0, 0
         for val in resp_df[col]:
             p = parse_prediccion(val)
             if p:
-                pred_wins_a = 4 if p['ganador'] == t_a else (p['total_juegos'] - 4)
-                wins_a_total += pred_wins_a
-                games_total += p['total_juegos']
-        crowd_probs[col] = wins_a_total / games_total if games_total > 0 else 0.5
+                total_g += p['total_juegos']
+                wins_a += 4 if clean(p['ganador']) == clean(t_a_name) else (p['total_juegos'] - 4)
+        crowd_probs[col] = wins_a / total_g if total_g > 0 else 0.5
 
     resultados = []
     for _, user in resp_df.iterrows():
-        puntos_reales, puntos_ev, puntos_max = 0, 0, 0
+        puntos_reales, ev, max_posible = 0, 0, 0
         
         for col in series_cols:
-            stat = status_dict.get(col)
+            stat = status_dict.get(clean(col))
             pred = parse_prediccion(user[col])
             if not pred or not stat: continue
             
-            t_a, t_b = [t.strip() for t in col.split(" vs ")]
-            s_a, s_b = int(stat.get('Games_Team_A', 0)), int(stat.get('Games_Team_B', 0))
+            t_a_name, t_b_name = [t.strip() for t in col.split(" vs ")]
+            s_a = int(stat.get('Games_Team_A', 0))
+            s_b = int(stat.get('Games_Team_B', 0))
             n = s_a + s_b
             
-            # --- FÓRMULA DE PROBABILIDAD PONDERADA ---
-            w = min(n / 7, 0.85) # Peso de la realidad aumenta con cada juego
-            p_live = (s_a / n) if n > 0 else 0.5
-            p_crowd = crowd_probs.get(col, 0.5)
-            p_final_a = (w * p_live) + ((1 - w) * p_crowd)
+            # --- EV LOGIC (Weighted formula) ---
+            w = min(n / 7, 0.85) 
+            p_l = (s_a / n) if n > 0 else 0.5
+            p_c = crowd_probs.get(col, 0.5)
+            p_final_a = (w * p_l) + ((1 - w) * p_c)
             
             outcomes = calcular_probabilidades_serie(p_final_a, s_a, s_b)
             
             m_ev = 0
-            pts_en_posibles_escenarios = []
+            pts_posibles_match = []
             
             for (f_a, f_b), prob in outcomes.items():
                 pts = 0
-                ganador_final = t_a if f_a == 4 else t_b
-                total_juegos_final = f_a + f_b
-                
-                # IMPORTANTE: Comparación exacta con .strip()
-                if pred['ganador'].strip() == ganador_final.strip():
-                    pts += 1 # 1 punto por ganador
-                    if pred['total_juegos'] == total_juegos_final:
-                        pts += 2 # 2 puntos por juegos exactos
-                
+                ganador_final = t_a_name if f_a == 4 else t_b_name
+                if clean(pred['ganador']) == clean(ganador_final):
+                    pts += 1
+                    if int(pred['total_juegos']) == (f_a + f_b):
+                        pts += 2
                 m_ev += pts * prob
-                pts_en_posibles_escenarios.append(pts)
+                pts_posibles_match.append(pts)
 
             if s_a == 4 or s_b == 4:
-                # Serie finalizada
-                actual = 0
-                winner_real = t_a if s_a == 4 else t_b
-                if pred['ganador'].strip() == winner_real.strip():
-                    actual += 1
-                    if pred['total_juegos'] == (s_a + s_b):
-                        actual += 2
-                puntos_reales += actual
-                puntos_ev += actual
-                puntos_max += actual
+                final = 0
+                winner_real = t_a_name if s_a == 4 else t_b_name
+                if clean(pred['ganador']) == clean(winner_real):
+                    final += 1
+                    if int(pred['total_juegos']) == (s_a + s_b):
+                        final += 2
+                puntos_reales += final; ev += final; max_posible += final
             else:
-                # Serie en curso
-                puntos_ev += m_ev
-                puntos_max += max(pts_en_posibles_escenarios) if pts_en_posibles_escenarios else 0
+                ev += m_ev
+                max_posible += max(pts_posibles_match) if pts_posibles_match else 0
 
         resultados.append({
             "Email": user[email_col], 
             "Participante": user[nombre_col], 
             "Puntos": int(puntos_reales), 
-            "Esperado": round(float(puntos_ev), 2), 
-            "Máximo": int(puntos_max)
+            "Esperado": round(float(ev), 2), 
+            "Máximo": int(max_posible)
         })
 
     lb = pd.DataFrame(resultados)
@@ -196,16 +143,13 @@ def procesar_datos(resp_df, stat_df, playin_df):
         pi_email = next((c for c in playin_df.columns if 'correo' in c.lower() or 'email' in c.lower()), playin_df.columns[0])
         pi_score = next((c for c in playin_df.columns if 'score' in c.lower() or 'puntos' in c.lower()), playin_df.columns[1])
         pi_clean = playin_df[[pi_email, pi_score]].rename(columns={pi_email: 'Email', pi_score: 'PlayIn'})
-        
         lb = lb.merge(pi_clean, on='Email', how='left').fillna(0)
         lb['PlayIn'] = lb['PlayIn'].astype(int)
-        
-        # Criterio de Desempate: Puntos -> Esperado -> PlayIn
         lb = lb.sort_values(by=["Puntos", "Esperado", "PlayIn"], ascending=False).reset_index(drop=True)
         lb.insert(0, 'Posición', range(1, len(lb) + 1))
     return lb
 
-# --- 4. CARGA DE DATOS ---
+# --- 3. CARGA Y UI ---
 
 @st.cache_data(ttl=60)
 def cargar_todo():
@@ -216,59 +160,32 @@ def cargar_todo():
     r = pd.DataFrame(sh.worksheet("Responses_R1").get_all_records())
     s = pd.DataFrame(sh.worksheet("Series_Status").get_all_records())
     p = pd.DataFrame(sh.worksheet("PlayIn_Score").get_all_records())
-    l = procesar_datos(r, s, p)
-    return l, r
-
-# --- 5. INTERFAZ ---
-
-st.title("🏀 Apuestas NBA Playoffs 2026")
+    return procesar_datos(r, s, p), r
 
 try:
     df_l, df_r = cargar_todo()
+    st.title("🏀 Apuestas NBA Playoffs 2026")
+    tab1, tab2, tab3 = st.tabs(["🏆 Tabla de Posiciones", "📊 Resumen", "🔍 Registro"])
 
-    if df_l is not None and not df_l.empty:
-        tab1, tab2, tab3 = st.tabs(["🏆 Tabla de Posiciones", "📊 Resumen por Serie", "🔍 Registro de Predicciones"])
+    with tab1:
+        vista_df = df_l[['Posición', 'Participante', 'Puntos', 'Esperado', 'Máximo', 'PlayIn']].copy()
+        def format_name(row):
+            name = str(row['Participante'])
+            short = name[:18] + ".." if len(name) > 18 else name
+            return f"{row['Posición']} - {short}"
+        vista_df['Participante'] = vista_df.apply(format_name, axis=1)
+        st.table(vista_df.drop(columns=['Posición']).style.apply(lambda x: ["background-color: #90ee90" if x.name < 15 else "background-color: #ffcccb"] * len(x), axis=1).format({"Esperado": "{:.2f}"}))
 
-        with tab1:
-            st.markdown("### Clasificación en Vivo")
-            
-            # Solo columnas originales requeridas
-            vista_df = df_l[['Posición', 'Participante', 'Puntos', 'Esperado', 'Máximo', 'PlayIn']].copy()
-            
-            def format_name(row):
-                name = str(row['Participante'])
-                short_name = name[:18] + ".." if len(name) > 18 else name
-                return f"{row['Posición']} - {short_name}"
+    with tab2:
+        series_cols = [c for c in df_r.columns if " vs " in c]
+        if series_cols:
+            melted = df_r.melt(id_vars=[df_r.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
+            melted['Ganador'] = melted['Pred'].apply(lambda x: parse_prediccion(x)['ganador'] if parse_prediccion(x) else "N/A")
+            resumen = melted[melted['Ganador'] != "N/A"].groupby(['Serie', 'Ganador']).size().reset_index(name='Votos')
+            st.plotly_chart(px.bar(resumen, x='Serie', y='Votos', color='Ganador', barmode='stack', text='Votos'), use_container_width=True)
 
-            vista_df['Participante'] = vista_df.apply(format_name, axis=1)
-            vista_df = vista_df.drop(columns=['Posición'])
-
-            def aplicar_colores(row):
-                # Top 15 en verde, resto en rojo
-                bg = "background-color: #90ee90" if row.name < 15 else "background-color: #ffcccb"
-                return [bg] * len(row)
-
-            st.table(vista_df.style.apply(aplicar_colores, axis=1).format({"Esperado": "{:.2f}"}))
-
-        with tab2:
-            st.subheader("Distribución de Votos")
-            series_cols = [c for c in df_r.columns if " vs " in c]
-            if series_cols:
-                melted = df_r.melt(id_vars=[df_r.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
-                def extraer_ganador(pred):
-                    res = parse_prediccion(pred)
-                    return res['ganador'] if res else "N/A"
-                melted['Ganador'] = melted['Pred'].apply(extraer_ganador)
-                melted = melted[melted['Ganador'] != "N/A"]
-                resumen_votos = melted.groupby(['Serie', 'Ganador']).size().reset_index(name='Votos')
-                fig = px.bar(resumen_votos, x='Serie', y='Votos', color='Ganador', barmode='stack', text='Votos')
-                st.plotly_chart(fig, use_container_width=True)
-
-        with tab3:
-            st.subheader("Registro de Datos")
-            cols_ocultar = ['Marca temporal', 'Dirección de correo electrónico']
-            grid_raw = df_r.drop(columns=[c for c in cols_ocultar if c in df_r.columns])
-            st.dataframe(grid_raw, use_container_width=True)
+    with tab3:
+        st.dataframe(df_r.drop(columns=[c for c in ['Marca temporal', 'Dirección de correo electrónico'] if c in df_r.columns]), use_container_width=True)
 
 except Exception as e:
-    st.error(f"Error de ejecución: {e}")
+    st.error(f"Error: {e}")
