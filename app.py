@@ -108,128 +108,80 @@ def calcular_probabilidades_serie(p_a, s_a, s_b):
     return encontrar_camino(s_a, s_b)
 
 def procesar_datos(resp_df, stat_df, playin_df):
-    # 1. Standardize column names and data
     resp_df.columns = [c.strip() for c in resp_df.columns]
     stat_df.columns = [c.strip() for c in stat_df.columns]
     playin_df.columns = [c.strip() for c in playin_df.columns]
-    
     series_cols = [c for c in resp_df.columns if " vs " in c]
-    status_dict = {str(k).strip(): v for k, v in stat_df.set_index('Series_ID').to_dict('index').items()}
-    
+    status_dict = stat_df.set_index('Series_ID').to_dict('index')
     nombre_col = next((c for c in resp_df.columns if 'nombre' in c.lower()), resp_df.columns[2])
     email_col = next((c for c in resp_df.columns if 'correo' in c.lower() or 'email' in c.lower()), resp_df.columns[1])
 
-    # 2. Pre-calculate Crowd Probabilities (Game-level)
-    crowd_game_probs = {}
+    crowd_probs = {}
     for col in series_cols:
-        t_a = col.split(" vs ")[0].strip()
-        wins_a_total, games_total = 0, 0
+        t_a = col.split(" vs ")[0]
+        wins_a, total_g = 0, 0
         for val in resp_df[col]:
             p = parse_prediccion(val)
             if p:
-                # If they predict Team A wins 4-2, Team A won 4 games out of 6
-                predicted_wins_a = 4 if p['ganador'].strip() == t_a else (p['total_juegos'] - 4)
-                wins_a_total += predicted_wins_a
-                games_total += p['total_juegos']
-        crowd_game_probs[col] = wins_a_total / games_total if games_total > 0 else 0.5
+                total_g += p['total_juegos']
+                wins_a += 4 if p['ganador'] == t_a else (p['total_juegos'] - 4)
+        crowd_probs[col] = wins_a / total_g if total_g > 0 else 0.5
 
     resultados = []
     for _, user in resp_df.iterrows():
-        puntos_reales = 0
-        puntos_ev = 0
-        puntos_max = 0
-        
+        puntos_reales, ev, max_posible = 0, 0, 0
         for col in series_cols:
-            stat = status_dict.get(col.strip())
+            stat = status_dict.get(col)
             pred = parse_prediccion(user[col])
-            
-            if not pred or not stat:
-                continue
-
-            t_a, t_b = [t.strip() for t in col.split(" vs ")]
-            s_a = int(stat.get('Games_Team_A', 0))
-            s_b = int(stat.get('Games_Team_B', 0))
-            n_played = s_a + s_b
-            
-            # --- PROBABILITY CALCULATION (Weighted Shifting) ---
-            # w grows as more games are played (0.0 at start, 0.85 at game 6)
-            w = min(n_played / 7, 0.85) 
-            
-            # Live performance: what % of played games has Team A won?
-            live_win_rate = s_a / n_played if n_played > 0 else 0.5
-            p_crowd = crowd_game_probs.get(col, 0.5)
-            
-            # Probability that Team A wins any SINGLE future game
-            p_game_a = (w * live_win_rate) + ((1 - w) * p_crowd)
-            
-            # Simulate all possible remaining outcomes
-            outcomes = calcular_probabilidades_serie(p_game_a, s_a, s_b)
-            
-            series_max = 0
-            series_ev = 0
-            
-            # Check every final scenario (e.g., 4-3, 4-2, etc.)
+            if not pred or not stat: continue
+            t_a, t_b = col.split(" vs ")
+            s_a, s_b = int(stat.get('Games_Team_A', 0)), int(stat.get('Games_Team_B', 0))
+            n = s_a + s_b
+            p_c = crowd_probs[col]
+            p_l = (s_a / n) if n > 0 else 0.5
+            w = min(n / 6, 1.0)
+            p_final_a = (w * p_l) + ((1 - w) * p_c)
+            outcomes = calcular_probabilidades_serie(p_final_a, s_a, s_b)
+            m_ev = 0
+            pts_posibles_match = []
             for (f_a, f_b), prob in outcomes.items():
                 pts = 0
                 ganador_final = t_a if f_a == 4 else t_b
-                total_games_final = f_a + f_b
-                
-                # Match Winner (1 pt) + Exact Games (2 pts)
-                if pred['ganador'].strip() == ganador_final:
+                if pred['ganador'] == ganador_final:
                     pts += 1
-                    if pred['total_juegos'] == total_games_final:
-                        pts += 2
-                
-                # Update Max and EV
-                series_ev += pts * prob
-                if pts > series_max:
-                    series_max = pts
-
-            # --- ASSIGNMENT ---
+                    if pred['total_juegos'] == (f_a + f_b): pts += 2
+                m_ev += pts * prob
+                if prob > 0: pts_posibles_match.append(pts)
             if s_a == 4 or s_b == 4:
-                # Series is finished
-                final_pts = 0
-                winner_real = t_a if s_a == 4 else t_b
-                if pred['ganador'].strip() == winner_real:
-                    final_pts += 1
-                    if pred['total_juegos'] == (s_a + s_b):
-                        final_pts += 2
-                puntos_reales += final_pts
-                puntos_ev += final_pts
-                puntos_max += final_pts
+                final = 0
+                w_real = t_a if s_a == 4 else t_b
+                if pred['ganador'] == w_real:
+                    final += 1
+                    if pred['total_juegos'] == (s_a + s_b): final += 2
+                puntos_reales += final; ev += final; max_posible += final
             else:
-                # Series is active
-                puntos_ev += series_ev
-                puntos_max += series_max
+                ev += m_ev
+                max_posible += max(pts_posibles_match) if pts_posibles_match else 0
 
         resultados.append({
             "Email": user[email_col], 
             "Participante": user[nombre_col], 
             "Puntos": int(puntos_reales), 
-            "Esperado": round(float(puntos_ev), 2), 
-            "Máximo": int(puntos_max)
+            "Esperado": round(float(ev), 2), 
+            "Máximo": int(max_posible)
         })
 
-    # 3. Final Assembly
     lb = pd.DataFrame(resultados)
     if not lb.empty:
-        # Merge with Play-In
-        pi_email_col = next((c for c in playin_df.columns if 'correo' in c.lower() or 'email' in c.lower()), playin_df.columns[0])
-        pi_score_col = next((c for c in playin_df.columns if 'score' in c.lower() or 'puntos' in c.lower()), playin_df.columns[1])
-        pi_clean = playin_df[[pi_email_col, pi_score_col]].rename(columns={pi_email_col: 'Email', pi_score_col: 'PlayIn'})
-        
+        pi_email = next((c for c in playin_df.columns if 'correo' in c.lower() or 'email' in c.lower()), playin_df.columns[0])
+        pi_score = next((c for c in playin_df.columns if 'score' in c.lower() or 'puntos' in c.lower()), playin_df.columns[1])
+        pi_clean = playin_df[[pi_email, pi_score]].rename(columns={pi_email: 'Email', pi_score: 'PlayIn'})
         lb = lb.merge(pi_clean, on='Email', how='left').fillna(0)
         lb['PlayIn'] = lb['PlayIn'].astype(int)
-        
-        # Add PlayIn to the totals for Ranking
-        lb['Puntos Total'] = lb['Puntos'] + lb['PlayIn']
-        lb['Max Total'] = lb['Máximo'] + lb['PlayIn']
-        lb['EV Total'] = lb['Esperado'] + lb['PlayIn']
-        
-        lb = lb.sort_values(by=["Puntos Total", "EV Total", "Max Total"], ascending=False).reset_index(drop=True)
+        lb = lb.sort_values(by=["Puntos", "Esperado", "PlayIn"], ascending=False).reset_index(drop=True)
         lb.insert(0, 'Posición', range(1, len(lb) + 1))
-    
     return lb
+
 # --- 4. CARGA DE DATOS ---
 
 @st.cache_data(ttl=60)
