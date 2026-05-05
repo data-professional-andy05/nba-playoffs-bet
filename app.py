@@ -157,15 +157,23 @@ def cargar_todo():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
     client = gspread.authorize(creds)
     sh = client.open("NBA_Playoffs_2026")
-    r = pd.DataFrame(sh.worksheet("Responses_R1").get_all_records())
+    
+    # Cargar respuestas de R1 y R2 por separado
+    r1 = pd.DataFrame(sh.worksheet("Responses_R1").get_all_records())
+    r2 = pd.DataFrame(sh.worksheet("Responses_R2").get_all_records())
+    
     s = pd.DataFrame(sh.worksheet("Series_Status").get_all_records())
     p = pd.DataFrame(sh.worksheet("PlayIn_Score").get_all_records())
-    return procesar_datos(r, s, p), r
+    
+    # Solo procesamos puntos para R1 (esto mantiene el Leaderboard igual que antes)
+    return procesar_datos(r1, s, p), r1, r2
 
 try:
-    df_l, df_r = cargar_todo()
+    df_l, df_r1, df_r2 = cargar_todo()
     st.title("🏀 Apuestas NBA Playoffs 2026")
-    tab1, tab2, tab3 = st.tabs(["🏆 Tabla de Posiciones", "📊 Resumen", "🔍 Registro"])
+    
+    # Añadimos la pestaña para el registro de la Ronda 2
+    tab1, tab2, tab3, tab4 = st.tabs(["🏆 Tabla de Posiciones", "📊 Resumen R1", "🔍 Registro R1", "🔍 Registro R2"])
 
     with tab1:
         vista_df = df_l[['Posición', 'Participante', 'Puntos', 'Esperado', 'Máximo', 'PlayIn']].copy()
@@ -177,15 +185,23 @@ try:
         st.table(vista_df.drop(columns=['Posición']).style.apply(lambda x: ["background-color: #90ee90" if x.name < 15 else "background-color: #ffcccb"] * len(x), axis=1).format({"Esperado": "{:.2f}"}))
 
     with tab2:
-        series_cols = [c for c in df_r.columns if " vs " in c]
+        # Resumen basado solo en R1
+        series_cols = [c for c in df_r1.columns if " vs " in c]
         if series_cols:
-            melted = df_r.melt(id_vars=[df_r.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
+            melted = df_r1.melt(id_vars=[df_r1.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
             melted['Ganador'] = melted['Pred'].apply(lambda x: parse_prediccion(x)['ganador'] if parse_prediccion(x) else "N/A")
             resumen = melted[melted['Ganador'] != "N/A"].groupby(['Serie', 'Ganador']).size().reset_index(name='Votos')
             st.plotly_chart(px.bar(resumen, x='Serie', y='Votos', color='Ganador', barmode='stack', text='Votos'), use_container_width=True)
 
     with tab3:
-        st.dataframe(df_r.drop(columns=[c for c in ['Marca temporal', 'Dirección de correo electrónico'] if c in df_r.columns]), use_container_width=True)
+        # Registro de la Ronda 1
+        st.subheader("Predicciones Ronda 1")
+        st.dataframe(df_r1.drop(columns=[c for c in ['Marca temporal', 'Dirección de correo electrónico'] if c in df_r1.columns], errors='ignore'), use_container_width=True)
+
+    with tab4:
+        # Registro de la Ronda 2 (Solo lectura, no afecta puntos)
+        st.subheader("Predicciones Ronda 2")
+        st.dataframe(df_r2.drop(columns=[c for c in ['Marca temporal', 'Dirección de correo electrónico'] if c in df_r2.columns], errors='ignore'), use_container_width=True)
 
 except Exception as e:
     st.error(f"Error: {e}")
