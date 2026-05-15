@@ -60,6 +60,8 @@ def calcular_probabilidades_serie(p_a, s_a, s_b):
     return encontrar_camino(s_a, s_b)
 
 def procesar_datos(resp_df, stat_df, playin_df):
+    if resp_df.empty: return pd.DataFrame()
+    
     # Normalizar nombres de columnas
     resp_df.columns = [c.strip() for c in resp_df.columns]
     stat_df.columns = [c.strip() for c in stat_df.columns]
@@ -158,50 +160,122 @@ def cargar_todo():
     client = gspread.authorize(creds)
     sh = client.open("NBA_Playoffs_2026")
     
-    # Cargar respuestas de R1 y R2 por separado
+    # Cargar DataFrames
     r1 = pd.DataFrame(sh.worksheet("Responses_R1").get_all_records())
     r2 = pd.DataFrame(sh.worksheet("Responses_R2").get_all_records())
     
-    s = pd.DataFrame(sh.worksheet("Series_Status").get_all_records())
+    s1 = pd.DataFrame(sh.worksheet("Series_Status").get_all_records())
+    s2 = pd.DataFrame(sh.worksheet("Series_Status_2").get_all_records()) # Status Ronda 2
+    
     p = pd.DataFrame(sh.worksheet("PlayIn_Score").get_all_records())
     
-    # Solo procesamos puntos para R1 (esto mantiene el Leaderboard igual que antes)
-    return procesar_datos(r1, s, p), r1, r2
-
-try:
-    df_l, df_r1, df_r2 = cargar_todo()
-    st.title("🏀 Apuestas NBA Playoffs 2026")
+    # Procesar ambas rondas
+    lb_r1 = procesar_datos(r1, s1, p)
+    lb_r2 = procesar_datos(r2, s2, p)
     
-    # Añadimos la pestaña para el registro de la Ronda 2
-    tab1, tab2, tab3, tab4 = st.tabs(["🏆 Tabla de Posiciones", "📊 Resumen R1", "🔍 Registro R1", "🔍 Registro R2"])
+    return lb_r1, lb_r2, r1, r2
 
-    with tab1:
-        vista_df = df_l[['Posición', 'Participante', 'Puntos', 'Esperado', 'Máximo', 'PlayIn']].copy()
-        def format_name(row):
-            name = str(row['Participante'])
-            short = name[:18] + ".." if len(name) > 18 else name
-            return f"{row['Posición']} - {short}"
-        vista_df['Participante'] = vista_df.apply(format_name, axis=1)
-        st.table(vista_df.drop(columns=['Posición']).style.apply(lambda x: ["background-color: #90ee90" if x.name < 15 else "background-color: #ffcccb"] * len(x), axis=1).format({"Esperado": "{:.2f}"}))
+# Funciones de ayuda para UI
+def get_vista_df(df):
+    if df.empty: return df
+    vista_df = df[['Posición', 'Participante', 'Puntos', 'Esperado', 'Máximo', 'PlayIn']].copy()
+    def format_name(row):
+        name = str(row['Participante'])
+        short = name[:18] + ".." if len(name) > 18 else name
+        return f"{row['Posición']} - {short}"
+    vista_df['Participante'] = vista_df.apply(format_name, axis=1)
+    return vista_df.drop(columns=['Posición'])
 
-    with tab2:
-        # Resumen basado solo en R1
-        series_cols = [c for c in df_r1.columns if " vs " in c]
-        if series_cols:
-            melted = df_r1.melt(id_vars=[df_r1.columns[2]], value_vars=series_cols, var_name='Serie', value_name='Pred')
-            melted['Ganador'] = melted['Pred'].apply(lambda x: parse_prediccion(x)['ganador'] if parse_prediccion(x) else "N/A")
-            resumen = melted[melted['Ganador'] != "N/A"].groupby(['Serie', 'Ganador']).size().reset_index(name='Votos')
+def plot_resumen(df_resp):
+    if df_resp.empty: return
+    series_cols = [c for c in df_resp.columns if " vs " in c]
+    if series_cols:
+        nombre_col = next((c for c in df_resp.columns if 'nombre' in c.lower()), df_resp.columns[2])
+        melted = df_resp.melt(id_vars=[nombre_col], value_vars=series_cols, var_name='Serie', value_name='Pred')
+        melted['Ganador'] = melted['Pred'].apply(lambda x: parse_prediccion(x)['ganador'] if parse_prediccion(x) else "N/A")
+        resumen = melted[melted['Ganador'] != "N/A"].groupby(['Serie', 'Ganador']).size().reset_index(name='Votos')
+        if not resumen.empty:
             st.plotly_chart(px.bar(resumen, x='Serie', y='Votos', color='Ganador', barmode='stack', text='Votos'), use_container_width=True)
 
-    with tab3:
-        # Registro de la Ronda 1
-        st.subheader("Predicciones Ronda 1")
-        st.dataframe(df_r1.drop(columns=[c for c in ['Marca temporal', 'Dirección de correo electrónico'] if c in df_r1.columns], errors='ignore'), use_container_width=True)
+try:
+    lb_r1, lb_r2, df_r1, df_r2 = cargar_todo()
+    st.title("🏀 Apuestas NBA Playoffs 2026")
+    
+    # --- LOGICA DE SEPARACIÓN DE BRACKETS (R2) ---
+    if not lb_r1.empty:
+        # Extraer los emails de los 15 primeros en R1
+        winners_emails = lb_r1.iloc[:15]['Email'].str.lower().str.strip().tolist()
+    else:
+        winners_emails = []
 
-    with tab4:
-        # Registro de la Ronda 2 (Solo lectura, no afecta puntos)
-        st.subheader("Predicciones Ronda 2")
+    if not lb_r2.empty:
+        lb_r2['Email_Clean'] = lb_r2['Email'].astype(str).str.lower().str.strip()
+        
+        # Filtrar Winners Bracket
+        lb_r2_winners = lb_r2[lb_r2['Email_Clean'].isin(winners_emails)].copy().reset_index(drop=True)
+        lb_r2_winners['Posición'] = range(1, len(lb_r2_winners) + 1)
+        
+        # Filtrar Losers Bracket
+        lb_r2_losers = lb_r2[~lb_r2['Email_Clean'].isin(winners_emails)].copy().reset_index(drop=True)
+        lb_r2_losers['Posición'] = range(1, len(lb_r2_losers) + 1)
+        
+        lb_r2_winners = lb_r2_winners.drop(columns=['Email_Clean'])
+        lb_r2_losers = lb_r2_losers.drop(columns=['Email_Clean'])
+    else:
+        lb_r2_winners = pd.DataFrame()
+        lb_r2_losers = pd.DataFrame()
+
+    # Creación de pestañas (Ronda 2 primero)
+    tabs = st.tabs([
+        "🏆 R2 - Winners", 
+        "🔥 R2 - Losers", 
+        "📊 Resumen R2", 
+        "🏆 R1 - Posiciones Finales", 
+        "📊 Resumen R1", 
+        "🔍 Registro R2", 
+        "🔍 Registro R1"
+    ])
+
+    with tabs[0]:
+        st.subheader("Ronda 2 - Winners Bracket (Top 7 avanzan)")
+        if not lb_r2_winners.empty:
+            st.table(get_vista_df(lb_r2_winners).style.apply(
+                lambda x: ["background-color: #90ee90" if x.name < 7 else "background-color: #ffcccb"] * len(x), axis=1
+            ).format({"Esperado": "{:.2f}"}))
+        else:
+            st.info("Esperando predicciones de la Ronda 2...")
+
+    with tabs[1]:
+        st.subheader("Ronda 2 - Losers Bracket (Top 3 se mantienen vivos)")
+        if not lb_r2_losers.empty:
+            st.table(get_vista_df(lb_r2_losers).style.apply(
+                lambda x: ["background-color: #90ee90" if x.name < 3 else "background-color: #ffcccb"] * len(x), axis=1
+            ).format({"Esperado": "{:.2f}"}))
+        else:
+            st.info("Esperando predicciones de la Ronda 2...")
+
+    with tabs[2]:
+        st.subheader("Gráficas Predicciones Ronda 2")
+        plot_resumen(df_r2)
+
+    with tabs[3]:
+        st.subheader("Ronda 1 - Tabla General Final (Top 15 pasaron a Winners)")
+        if not lb_r1.empty:
+            st.table(get_vista_df(lb_r1).style.apply(
+                lambda x: ["background-color: #90ee90" if x.name < 15 else "background-color: #ffcccb"] * len(x), axis=1
+            ).format({"Esperado": "{:.2f}"}))
+
+    with tabs[4]:
+        st.subheader("Gráficas Predicciones Ronda 1")
+        plot_resumen(df_r1)
+
+    with tabs[5]:
+        st.subheader("Respuestas Originales Ronda 2")
         st.dataframe(df_r2.drop(columns=[c for c in ['Marca temporal', 'Dirección de correo electrónico'] if c in df_r2.columns], errors='ignore'), use_container_width=True)
+
+    with tabs[6]:
+        st.subheader("Respuestas Originales Ronda 1")
+        st.dataframe(df_r1.drop(columns=[c for c in ['Marca temporal', 'Dirección de correo electrónico'] if c in df_r1.columns], errors='ignore'), use_container_width=True)
 
 except Exception as e:
     st.error(f"Error: {e}")
