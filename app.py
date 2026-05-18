@@ -44,22 +44,7 @@ def parse_prediccion(pred_str):
     except:
         return None
 
-def calcular_probabilidades_serie(p_a, s_a, s_b):
-    memo = {}
-    def encontrar_camino(curr_a, curr_b):
-        if curr_a == 4 or curr_b == 4: return {(curr_a, curr_b): 1.0}
-        estado = (curr_a, curr_b)
-        if estado in memo: return memo[estado]
-        res = {}
-        for (f_a, f_b), prob in encontrar_camino(curr_a + 1, curr_b).items():
-            res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * p_a
-        for (f_a, f_b), prob in encontrar_camino(curr_a, curr_b + 1).items():
-            res[(f_a, f_b)] = res.get((f_a, f_b), 0) + prob * (1 - p_a)
-        memo[estado] = res
-        return res
-    return encontrar_camino(s_a, s_b)
-
-def procesar_datos(resp_df, stat_df, playin_df):
+def procesar_datos(resp_df, stat_df, playin_df, r1_scores=None):
     if resp_df.empty: return pd.DataFrame()
     
     # Normalizar nombres de columnas
@@ -73,21 +58,9 @@ def procesar_datos(resp_df, stat_df, playin_df):
     nombre_col = next((c for c in resp_df.columns if 'nombre' in c.lower()), resp_df.columns[2])
     email_col = next((c for c in resp_df.columns if 'correo' in c.lower() or 'email' in c.lower()), resp_df.columns[1])
 
-    # 1. Probabilidades de la Multitud (Crowd)
-    crowd_probs = {}
-    for col in series_cols:
-        t_a_name = col.split(" vs ")[0].strip()
-        wins_a, total_g = 0, 0
-        for val in resp_df[col]:
-            p = parse_prediccion(val)
-            if p:
-                total_g += p['total_juegos']
-                wins_a += 4 if clean(p['ganador']) == clean(t_a_name) else (p['total_juegos'] - 4)
-        crowd_probs[col] = wins_a / total_g if total_g > 0 else 0.5
-
     resultados = []
     for _, user in resp_df.iterrows():
-        puntos_reales, ev, max_posible = 0, 0, 0
+        puntos_reales = 0
         
         for col in series_cols:
             stat = status_dict.get(clean(col))
@@ -97,29 +70,8 @@ def procesar_datos(resp_df, stat_df, playin_df):
             t_a_name, t_b_name = [t.strip() for t in col.split(" vs ")]
             s_a = int(stat.get('Games_Team_A', 0))
             s_b = int(stat.get('Games_Team_B', 0))
-            n = s_a + s_b
             
-            # --- EV LOGIC (Weighted formula) ---
-            w = min(n / 7, 0.85) 
-            p_l = (s_a / n) if n > 0 else 0.5
-            p_c = crowd_probs.get(col, 0.5)
-            p_final_a = (w * p_l) + ((1 - w) * p_c)
-            
-            outcomes = calcular_probabilidades_serie(p_final_a, s_a, s_b)
-            
-            m_ev = 0
-            pts_posibles_match = []
-            
-            for (f_a, f_b), prob in outcomes.items():
-                pts = 0
-                ganador_final = t_a_name if f_a == 4 else t_b_name
-                if clean(pred['ganador']) == clean(ganador_final):
-                    pts += 1
-                    if int(pred['total_juegos']) == (f_a + f_b):
-                        pts += 2
-                m_ev += pts * prob
-                pts_posibles_match.append(pts)
-
+            # Solo puntuamos si la serie ha terminado (alguien llegó a 4)
             if s_a == 4 or s_b == 4:
                 final = 0
                 winner_real = t_a_name if s_a == 4 else t_b_name
@@ -127,28 +79,42 @@ def procesar_datos(resp_df, stat_df, playin_df):
                     final += 1
                     if int(pred['total_juegos']) == (s_a + s_b):
                         final += 2
-                puntos_reales += final; ev += final; max_posible += final
-            else:
-                ev += m_ev
-                max_posible += max(pts_posibles_match) if pts_posibles_match else 0
+                puntos_reales += final
 
         resultados.append({
             "Email": user[email_col], 
             "Participante": user[nombre_col], 
-            "Puntos": int(puntos_reales), 
-            "Esperado": round(float(ev), 2), 
-            "Máximo": int(max_posible)
+            "Puntos": int(puntos_reales)
         })
 
     lb = pd.DataFrame(resultados)
     if not lb.empty:
+        # Preparamos keys minúsculas para un cruce a prueba de errores
+        lb['Email_Key'] = lb['Email'].astype(str).str.lower().str.strip()
+        
+        # Merge de PlayIn
         pi_email = next((c for c in playin_df.columns if 'correo' in c.lower() or 'email' in c.lower()), playin_df.columns[0])
         pi_score = next((c for c in playin_df.columns if 'score' in c.lower() or 'puntos' in c.lower()), playin_df.columns[1])
         pi_clean = playin_df[[pi_email, pi_score]].rename(columns={pi_email: 'Email', pi_score: 'PlayIn'})
-        lb = lb.merge(pi_clean, on='Email', how='left').fillna(0)
+        pi_clean['Email_Key'] = pi_clean['Email'].astype(str).str.lower().str.strip()
+        
+        lb = lb.merge(pi_clean[['Email_Key', 'PlayIn']], on='Email_Key', how='left').fillna(0)
         lb['PlayIn'] = lb['PlayIn'].astype(int)
-        lb = lb.sort_values(by=["Puntos", "Esperado", "PlayIn"], ascending=False).reset_index(drop=True)
+
+        # Merge R1 Scores para R2 y ordenamiento
+        if r1_scores is not None and not r1_scores.empty:
+            r1_scores['Email_Key'] = r1_scores['Email'].astype(str).str.lower().str.strip()
+            lb = lb.merge(r1_scores[['Email_Key', 'Pts_R1']], on='Email_Key', how='left').fillna(0)
+            lb['Pts_R1'] = lb['Pts_R1'].astype(int)
+            # Desempate en R2: 1) Puntos R2, 2) Puntos R1, 3) Puntos PlayIn
+            lb = lb.sort_values(by=["Puntos", "Pts_R1", "PlayIn"], ascending=False).reset_index(drop=True)
+        else:
+            # Desempate estándar R1: 1) Puntos R1, 2) Puntos PlayIn
+            lb = lb.sort_values(by=["Puntos", "PlayIn"], ascending=False).reset_index(drop=True)
+            
+        lb = lb.drop(columns=['Email_Key'])
         lb.insert(0, 'Posición', range(1, len(lb) + 1))
+        
     return lb
 
 # --- 3. CARGA Y UI ---
@@ -165,20 +131,34 @@ def cargar_todo():
     r2 = pd.DataFrame(sh.worksheet("Responses_R2").get_all_records())
     
     s1 = pd.DataFrame(sh.worksheet("Series_Status").get_all_records())
-    s2 = pd.DataFrame(sh.worksheet("Series_Status_2").get_all_records()) # Status Ronda 2
+    s2 = pd.DataFrame(sh.worksheet("Series_Status_2").get_all_records())
     
     p = pd.DataFrame(sh.worksheet("PlayIn_Score").get_all_records())
     
-    # Procesar ambas rondas
+    # Procesar R1
     lb_r1 = procesar_datos(r1, s1, p)
-    lb_r2 = procesar_datos(r2, s2, p)
+    
+    # Extraer puntajes de R1 para usarlos como criterio de desempate en R2
+    r1_scores = None
+    if not lb_r1.empty:
+        r1_scores = lb_r1[['Email', 'Puntos']].rename(columns={'Puntos': 'Pts_R1'})
+        
+    # Procesar R2 usando los puntajes de R1
+    lb_r2 = procesar_datos(r2, s2, p, r1_scores=r1_scores)
     
     return lb_r1, lb_r2, r1, r2
 
 # Funciones de ayuda para UI
-def get_vista_df(df):
+def get_vista_df(df, is_r2=False):
     if df.empty: return df
-    vista_df = df[['Posición', 'Participante', 'Puntos', 'Esperado', 'Máximo', 'PlayIn']].copy()
+    
+    # Si es R2 incluimos la columna de puntos de R1
+    if is_r2 and 'Pts_R1' in df.columns:
+        cols = ['Posición', 'Participante', 'Puntos', 'Pts_R1', 'PlayIn']
+    else:
+        cols = ['Posición', 'Participante', 'Puntos', 'PlayIn']
+        
+    vista_df = df[cols].copy()
     def format_name(row):
         name = str(row['Participante'])
         short = name[:18] + ".." if len(name) > 18 else name
@@ -239,18 +219,19 @@ try:
     with tabs[0]:
         st.subheader("Ronda 2 - Winners Bracket (Top 7 avanzan)")
         if not lb_r2_winners.empty:
-            st.table(get_vista_df(lb_r2_winners).style.apply(
+            # Pasamos is_r2=True y removemos el formateo anterior
+            st.table(get_vista_df(lb_r2_winners, is_r2=True).style.apply(
                 lambda x: ["background-color: #90ee90" if x.name < 7 else "background-color: #ffcccb"] * len(x), axis=1
-            ).format({"Esperado": "{:.2f}"}))
+            ))
         else:
             st.info("Esperando predicciones de la Ronda 2...")
 
     with tabs[1]:
         st.subheader("Ronda 2 - Losers Bracket (Top 3 se mantienen vivos)")
         if not lb_r2_losers.empty:
-            st.table(get_vista_df(lb_r2_losers).style.apply(
+            st.table(get_vista_df(lb_r2_losers, is_r2=True).style.apply(
                 lambda x: ["background-color: #90ee90" if x.name < 3 else "background-color: #ffcccb"] * len(x), axis=1
-            ).format({"Esperado": "{:.2f}"}))
+            ))
         else:
             st.info("Esperando predicciones de la Ronda 2...")
 
@@ -261,9 +242,9 @@ try:
     with tabs[3]:
         st.subheader("Ronda 1 - Tabla General Final (Top 15 pasaron a Winners)")
         if not lb_r1.empty:
-            st.table(get_vista_df(lb_r1).style.apply(
+            st.table(get_vista_df(lb_r1, is_r2=False).style.apply(
                 lambda x: ["background-color: #90ee90" if x.name < 15 else "background-color: #ffcccb"] * len(x), axis=1
-            ).format({"Esperado": "{:.2f}"}))
+            ))
 
     with tabs[4]:
         st.subheader("Gráficas Predicciones Ronda 1")
