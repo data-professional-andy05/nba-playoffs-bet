@@ -130,7 +130,7 @@ def get_vista_df(df, current_pts_col='Puntos', cols_extra=[]):
     if df.empty: return df
     cols = ['Posición', 'Participante', current_pts_col] + cols_extra + ['PlayIn']
     vista_df = df[cols].copy()
-    # Asegurar que PlayIn sea entero sin decimales
+    # PlayIn a entero para que no muestre decimales
     vista_df['PlayIn'] = vista_df['PlayIn'].astype(int)
     vista_df['Participante'] = vista_df.apply(lambda row: f"{row['Posición']} - {str(row['Participante'])[:18]}", axis=1)
     return vista_df.drop(columns=['Posición'])
@@ -172,19 +172,26 @@ try:
         lb_cf_losers = lb_cf[lb_cf['Email_Clean'].isin(cf_losers_pool)].copy().reset_index(drop=True)
         lb_cf_losers['Posición'] = range(1, len(lb_cf_losers) + 1)
 
-        # Clasificación a finales
-        finalistas = lb_cf_winners.iloc[:3].copy()
-        if len(lb_cf_winners) >= 4 and not lb_cf_losers.empty:
-            w4 = lb_cf_winners.iloc[3:4]
-            l1 = lb_cf_losers.iloc[0:1]
-            candidatos_4to = pd.concat([w4, l1]).sort_values(by=['Puntos', 'Pts_R2', 'Pts_R1', 'PlayIn'], ascending=False)
-            finalistas = pd.concat([finalistas, candidatos_4to.iloc[:1]])
-        elif len(lb_cf_winners) >= 4:
-            finalistas = pd.concat([finalistas, lb_cf_winners.iloc[3:4]])
-        elif not lb_cf_losers.empty:
-            finalistas = pd.concat([finalistas, lb_cf_losers.iloc[0:1]])
+        # --- LÓGICA DE FINALES ---
+        # 1. Los primeros 3 del winners bracket (siempre van primero)
+        top_3_winners = lb_cf_winners.iloc[:3].copy()
+        
+        # 2. El duelo por la 4ta plaza
+        w4 = lb_cf_winners.iloc[3:4]
+        l1 = lb_cf_losers.iloc[0:1]
+        
+        wildcard_candidates = pd.concat([w4, l1])
+        if not wildcard_candidates.empty:
+            # Tiebreakers: Puntos CF -> Pts_R2 -> Pts_R1 -> PlayIn
+            wildcard_winner = wildcard_candidates.sort_values(
+                by=['Puntos', 'Pts_R2', 'Pts_R1', 'PlayIn'], 
+                ascending=False
+            ).iloc[:1]
+        else:
+            wildcard_winner = pd.DataFrame()
             
-        lb_finals = finalistas.sort_values(by=['Puntos', 'Pts_R2', 'Pts_R1', 'PlayIn'], ascending=False).reset_index(drop=True)
+        # Unimos manteniendo el orden: 1, 2, 3 (Winners) y el 4to (Wildcard)
+        lb_finals = pd.concat([top_3_winners, wildcard_winner]).reset_index(drop=True)
         lb_finals = lb_finals.rename(columns={'Puntos': 'Pts_CF'})
         lb_finals['Posición'] = range(1, len(lb_finals) + 1)
     else:
@@ -198,45 +205,38 @@ try:
         "🔍 Registro CF", "🔍 Registro R2", "🔍 Registro R1"
     ])
 
-    # --- TAB 0: FINALES ---
     with tabs[0]:
         st.subheader("Clasificados a la Gran Final")
         if not lb_finals.empty:
-            # Se usa 'Pts_CF' como columna de puntos actual para este tab
+            # Estilo verde para todos en la final
             st.table(get_vista_df(lb_finals, 'Pts_CF', ['Pts_R2', 'Pts_R1']).style.apply(
                 lambda x: ["background-color: #90ee90"] * len(x), axis=1
             ))
-            st.info("Clasifican: Top 3 Winners + Mejor entre 4to Winners y 1ero Losers.")
+            st.info("Orden: Top 3 Winners Bracket + Ganador del desempate (4to Winners vs 1ro Losers)")
         else: st.info("Esperando resultados para definir finalistas...")
 
-    # --- TAB 1: CF Winners ---
     with tabs[1]:
         st.subheader("Conference Finals - Winners Bracket")
         if not lb_cf_winners.empty:
             st.table(get_vista_df(lb_cf_winners, 'Puntos', ['Pts_R2', 'Pts_R1']).style.apply(
                 lambda x: ["background-color: #90ee90" if x.name < 3 else "background-color: #ffff99" if x.name == 3 else "background-color: #ffcccb"] * len(x), axis=1
             ))
-        else: st.info("Esperando resultados CF...")
 
-    # --- TAB 2: CF Losers ---
     with tabs[2]:
         st.subheader("Conference Finals - Losers Bracket")
         if not lb_cf_losers.empty:
             st.table(get_vista_df(lb_cf_losers, 'Puntos', ['Pts_R2', 'Pts_R1']).style.apply(
                 lambda x: ["background-color: #ffff99" if x.name == 0 else "background-color: #ffcccb"] * len(x), axis=1
             ))
-        else: st.info("Esperando resultados CF...")
 
     with tabs[3]: plot_resumen(df_cf)
 
-    # --- TAB 4: R2 Winners ---
     with tabs[4]:
         st.subheader("Ronda 2 - Winners Bracket")
         if not lb_r2_winners_full.empty:
             df_v = get_vista_df(lb_r2_winners_full.assign(Posición=range(1, len(lb_r2_winners_full)+1)), 'Puntos', ['Pts_R1'])
             st.table(df_v.style.apply(lambda x: ["background-color: #90ee90" if x.name < 7 else "background-color: #ffcccb"] * len(x), axis=1))
 
-    # --- TAB 5: R2 Losers ---
     with tabs[5]:
         st.subheader("Ronda 2 - Losers Bracket")
         if not lb_r2_losers_full.empty:
@@ -245,7 +245,6 @@ try:
 
     with tabs[6]: plot_resumen(df_r2)
 
-    # --- TAB 7: R1 ---
     with tabs[7]:
         st.subheader("Ronda 1 - Posiciones Finales")
         if not lb_r1.empty:
@@ -253,7 +252,6 @@ try:
 
     with tabs[8]: plot_resumen(df_r1)
 
-    # --- REGISTROS ---
     with tabs[9]: st.dataframe(df_cf, use_container_width=True)
     with tabs[10]: st.dataframe(df_r2, use_container_width=True)
     with tabs[11]: st.dataframe(df_r1, use_container_width=True)
