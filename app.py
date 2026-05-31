@@ -11,7 +11,7 @@ st.set_page_config(page_title="NBA Playoffs 2026 - La Porra", layout="wide")
 st.markdown("""
     <style>
     [data-testid="stTable"] { display: block; overflow-x: auto; white-space: nowrap; }
-    [data-testid="stTable"] th { text-align: center !important; font-size: 17px !important; background-color: #1e1e1e !important; color: white !important; padding: 12_px !important; border-right: 2px solid #555 !important; border-bottom: 3px solid #000 !important; }
+    [data-testid="stTable"] th { text-align: center !important; font-size: 17px !important; background-color: #1e1e1e !important; color: white !important; padding: 12px !important; border-right: 2px solid #555 !important; border-bottom: 3px solid #000 !important; }
     [data-testid="stTable"] td { text-align: center !important; font-size: 20px !important; vertical-align: middle !important; color: black !important; border-bottom: 2px solid #666 !important; border-right: 1.5px solid #888 !important; padding: 10px !important; }
     [data-testid="stTable"] td:nth-child(1), [data-testid="stTable"] th:nth-child(1) { position: sticky; left: 0; z-index: 2; min-width: 180px !important; background-color: inherit; border-right: 3px solid #333 !important; }
     </style>
@@ -126,10 +126,12 @@ def cargar_todo():
     
     return lb_r1, lb_r2, lb_cf, r1, r2, rcf
 
-def get_vista_df(df, cols_extra=[]):
+def get_vista_df(df, current_pts_col='Puntos', cols_extra=[]):
     if df.empty: return df
-    cols = ['Posición', 'Participante', 'Puntos'] + cols_extra + ['PlayIn']
+    cols = ['Posición', 'Participante', current_pts_col] + cols_extra + ['PlayIn']
     vista_df = df[cols].copy()
+    # Asegurar que PlayIn sea entero sin decimales
+    vista_df['PlayIn'] = vista_df['PlayIn'].astype(int)
     vista_df['Participante'] = vista_df.apply(lambda row: f"{row['Posición']} - {str(row['Participante'])[:18]}", axis=1)
     return vista_df.drop(columns=['Posición'])
 
@@ -170,20 +172,12 @@ try:
         lb_cf_losers = lb_cf[lb_cf['Email_Clean'].isin(cf_losers_pool)].copy().reset_index(drop=True)
         lb_cf_losers['Posición'] = range(1, len(lb_cf_losers) + 1)
 
-        # --- LÓGICA DE CLASIFICACIÓN A FINALES ---
-        # 1. Los primeros 3 del winners bracket
+        # Clasificación a finales
         finalistas = lb_cf_winners.iloc[:3].copy()
-        
-        # 2. El mejor entre el 4to del winners y el 1ero del losers
-        # El sorting ya está hecho por procesar_datos (Puntos CF > Pts_R2 > Pts_R1 > PlayIn)
         if len(lb_cf_winners) >= 4 and not lb_cf_losers.empty:
             w4 = lb_cf_winners.iloc[3:4]
             l1 = lb_cf_losers.iloc[0:1]
-            # Concatenamos y re-ordenamos para aplicar el desempate entre ellos dos
-            candidatos_4to = pd.concat([w4, l1]).sort_values(
-                by=['Puntos', 'Pts_R2', 'Pts_R1', 'PlayIn'], 
-                ascending=False
-            )
+            candidatos_4to = pd.concat([w4, l1]).sort_values(by=['Puntos', 'Pts_R2', 'Pts_R1', 'PlayIn'], ascending=False)
             finalistas = pd.concat([finalistas, candidatos_4to.iloc[:1]])
         elif len(lb_cf_winners) >= 4:
             finalistas = pd.concat([finalistas, lb_cf_winners.iloc[3:4]])
@@ -191,11 +185,12 @@ try:
             finalistas = pd.concat([finalistas, lb_cf_losers.iloc[0:1]])
             
         lb_finals = finalistas.sort_values(by=['Puntos', 'Pts_R2', 'Pts_R1', 'PlayIn'], ascending=False).reset_index(drop=True)
+        lb_finals = lb_finals.rename(columns={'Puntos': 'Pts_CF'})
         lb_finals['Posición'] = range(1, len(lb_finals) + 1)
     else:
         lb_cf_winners, lb_cf_losers, lb_finals = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    # --- TABS (Se agregó "⭐ FINALES") ---
+    # --- TABS ---
     tabs = st.tabs([
         "⭐ FINALES", "🏆 CF - Winners", "🔥 CF - Losers", "📊 Resumen CF",
         "🏆 R2 - Winners", "🔥 R2 - Losers", "📊 Resumen R2",
@@ -203,60 +198,60 @@ try:
         "🔍 Registro CF", "🔍 Registro R2", "🔍 Registro R1"
     ])
 
-    # --- CONTENIDO FINALES ---
+    # --- TAB 0: FINALES ---
     with tabs[0]:
         st.subheader("Clasificados a la Gran Final")
         if not lb_finals.empty:
-            st.table(get_vista_df(lb_finals, ['Pts_R2', 'Pts_R1']).style.apply(
-                lambda x: ["background-color: #ffd700"] * len(x), axis=1
+            # Se usa 'Pts_CF' como columna de puntos actual para este tab
+            st.table(get_vista_df(lb_finals, 'Pts_CF', ['Pts_R2', 'Pts_R1']).style.apply(
+                lambda x: ["background-color: #90ee90"] * len(x), axis=1
             ))
             st.info("Clasifican: Top 3 Winners + Mejor entre 4to Winners y 1ero Losers.")
         else: st.info("Esperando resultados para definir finalistas...")
 
-    # --- CONTENIDO CF ---
+    # --- TAB 1: CF Winners ---
     with tabs[1]:
         st.subheader("Conference Finals - Winners Bracket")
         if not lb_cf_winners.empty:
-            st.table(get_vista_df(lb_cf_winners, ['Pts_R2', 'Pts_R1']).style.apply(
+            st.table(get_vista_df(lb_cf_winners, 'Puntos', ['Pts_R2', 'Pts_R1']).style.apply(
                 lambda x: ["background-color: #90ee90" if x.name < 3 else "background-color: #ffff99" if x.name == 3 else "background-color: #ffcccb"] * len(x), axis=1
             ))
         else: st.info("Esperando resultados CF...")
 
+    # --- TAB 2: CF Losers ---
     with tabs[2]:
         st.subheader("Conference Finals - Losers Bracket")
         if not lb_cf_losers.empty:
-            st.table(get_vista_df(lb_cf_losers, ['Pts_R2', 'Pts_R1']).style.apply(
+            st.table(get_vista_df(lb_cf_losers, 'Puntos', ['Pts_R2', 'Pts_R1']).style.apply(
                 lambda x: ["background-color: #ffff99" if x.name == 0 else "background-color: #ffcccb"] * len(x), axis=1
             ))
         else: st.info("Esperando resultados CF...")
 
-    with tabs[3]:
-        plot_resumen(df_cf)
+    with tabs[3]: plot_resumen(df_cf)
 
-    # --- CONTENIDO R2 ---
+    # --- TAB 4: R2 Winners ---
     with tabs[4]:
         st.subheader("Ronda 2 - Winners Bracket")
         if not lb_r2_winners_full.empty:
-            df_v = get_vista_df(lb_r2_winners_full.assign(Posición=range(1, len(lb_r2_winners_full)+1)), ['Pts_R1'])
+            df_v = get_vista_df(lb_r2_winners_full.assign(Posición=range(1, len(lb_r2_winners_full)+1)), 'Puntos', ['Pts_R1'])
             st.table(df_v.style.apply(lambda x: ["background-color: #90ee90" if x.name < 7 else "background-color: #ffcccb"] * len(x), axis=1))
 
+    # --- TAB 5: R2 Losers ---
     with tabs[5]:
         st.subheader("Ronda 2 - Losers Bracket")
         if not lb_r2_losers_full.empty:
-            df_v = get_vista_df(lb_r2_losers_full.assign(Posición=range(1, len(lb_r2_losers_full)+1)), ['Pts_R1'])
+            df_v = get_vista_df(lb_r2_losers_full.assign(Posición=range(1, len(lb_r2_losers_full)+1)), 'Puntos', ['Pts_R1'])
             st.table(df_v.style.apply(lambda x: ["background-color: #90ee90" if x.name < 3 else "background-color: #ffcccb"] * len(x), axis=1))
 
-    with tabs[6]:
-        plot_resumen(df_r2)
+    with tabs[6]: plot_resumen(df_r2)
 
-    # --- CONTENIDO R1 ---
+    # --- TAB 7: R1 ---
     with tabs[7]:
         st.subheader("Ronda 1 - Posiciones Finales")
         if not lb_r1.empty:
-            st.table(get_vista_df(lb_r1).style.apply(lambda x: ["background-color: #90ee90" if x.name < 15 else "background-color: #ffcccb"] * len(x), axis=1))
+            st.table(get_vista_df(lb_r1, 'Puntos').style.apply(lambda x: ["background-color: #90ee90" if x.name < 15 else "background-color: #ffcccb"] * len(x), axis=1))
 
-    with tabs[8]:
-        plot_resumen(df_r1)
+    with tabs[8]: plot_resumen(df_r1)
 
     # --- REGISTROS ---
     with tabs[9]: st.dataframe(df_cf, use_container_width=True)
